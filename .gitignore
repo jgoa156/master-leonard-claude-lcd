@@ -5,9 +5,6 @@ gen/
 __pycache__/
 *.pyc
 
-# the artwork: other artists' work, NOT redistributable. Supply your own (see assets/art/README.md)
-assets/art/*
-!assets/art/README.md
 docs/previews/
 legacy/skull/
 

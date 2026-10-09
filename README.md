@@ -3,9 +3,10 @@
 A ram-skull avatar for a small USB panel (5" 800x480, or 3.5" 480x320). Its eyes show what your Claude Code
 sessions are doing, and its head follows your mouse. One exe does everything: `bin\leonard.exe`.
 
-> **Art not included.** The ram skull this was built around is other artists' ASCII art and is not redistributable,
-> so this repository contains only the code. The art is plain text: put your own in `assets/art`
-> (see its README) and `.\build.ps1` turns it into the sprites.
+> **About the art.** The skull is plain text in `assets/art` (`right.txt`, `front.txt`) and `.\build.ps1` turns it into the
+> sprites. It was transcribed from two ASCII-art pieces by other artists (tagged "impure" and "lbs 12-21") and is **their
+> work, not covered by this repository's code licence** - see the credit in `assets/art/README.md`. Swap in your own
+> art by replacing those two files.
 > Needs Windows, a C compiler (gcc / MinGW) and Python 3 with Pillow and numpy.
 
 ## Moods
@@ -57,7 +58,7 @@ packet, exits in ~6 ms) Â· `--preview` Â· `--stop` Â· `--stale N` Â· `--
 bin/leonard.exe        the program (built, not committed)
 src/                   leonard.c (app + hook + preview), avatar.h (moods, priority, cursor logic)
 gen/                   generated headers: panel.h (the panel poses), sprites.h (not committed)
-assets/art/            YOUR art, plain text: right.txt, front.txt - see its README (not committed)
+assets/art/            the art, plain text: right.txt, front.txt (not original: see its README for the credit)
 tools/                 gen_sprites.py, gen_panel.py (art -> headers) and preview tools; paths.py knows the layout
 tests/                 test.ps1 (behaviour), check_render.py (pixels)
 legacy/terminal/       the terminal version of the avatar (dev tool)
