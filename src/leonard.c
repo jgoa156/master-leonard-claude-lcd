@@ -1,4 +1,4 @@
-﻿/* leonard.c - Master Leonard: the ram-skull Claude status avatar. ONE exe does everything.
+/* leonard.c - Master Leonard: the ram-skull Claude status avatar. ONE exe does everything.
  *
  *   build:  build.ps1  (python tools\gen_panel.py, then
  *           gcc -O2 -mwindows -I gen -I src -o bin\leonard.exe src\leonard.c -lgdi32 -lws2_32 -lm)
@@ -160,6 +160,7 @@ static void thick_init(void) {
 /* ---- audio ghosts: a cyan copy of the skull (left channel) and a #dc4583 copy (right channel) glow behind the
  *      white one, each as bright and as far out as its channel is loud. LEV = smoothed levels 0..1. */
 static float LEV[2], RAW[2];                               /* smoothed 0..1 levels, and the last raw peaks */
+static const float GHOST_MAG = 1.5f;                             /* the #dc4583 copy: raised opacity */
 static const float GHOST_CYAN = 0.70f;                           /* the cyan copy shines a bit less than the #dc4583 one */
 /* glitch: on each beat the ghosts jump to a random offset and a few horizontal slices of them shear sideways,
  * for ~0.1-0.2 s, then they snap back. Only the ghosts move; the white skull stays put. */
@@ -287,7 +288,8 @@ static void compose(const Av *a, long t) {
         for (int x = 0; x < PANEL_W; x++) {
         int sxl = x + oxL - dxl, sxr = x - oxR - dxr;
         float c = (L  > 0.01f && sxl >= 0 && sxl < PANEL_W && ycl >= 0 && ycl < PANEL_H) ? GH[pi][ycl][sxl] / 255.0f * bl * GHOST_CYAN * boost : 0;  /* cyan, left  */
-        float m = (Rt > 0.01f && sxr >= 0 && sxr < PANEL_W && ycr >= 0 && ycr < PANEL_H) ? GH[pi][ycr][sxr] / 255.0f * br * boost : 0;               /* #dc4583, right */
+        float m = (Rt > 0.01f && sxr >= 0 && sxr < PANEL_W && ycr >= 0 && ycr < PANEL_H) ? GH[pi][ycr][sxr] / 255.0f * br * GHOST_MAG * boost : 0;               /* #dc4583, right */
+        if (m > 1.0f) m = 1.0f;
         float bg[3] = {m * GHOST_R[0], c + m * GHOST_R[1], c + m * GHOST_R[2]};   /* cyan (0,1,1) + #dc4583 */
         unsigned char g = TK[pi][y][x];                       /* the skull: the thick version */
         for (int q = 0; q < 3; q++) {
