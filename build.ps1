@@ -23,7 +23,7 @@ foreach ($f in 'assets\art\right.txt', 'assets\art\front.txt') {
 
 # a running copy locks its .exe; stop it first
 if (Test-Path bin\leonard.exe) { & .\bin\leonard.exe --stop; Start-Sleep -Milliseconds 800 }
-Get-Process leonard, impure_avatar -ErrorAction SilentlyContinue | Stop-Process
+Get-Process leonard, impure_avatar -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($PSScriptRoot, [StringComparison]::OrdinalIgnoreCase) } | Stop-Process     # only this folder's copies
 New-Item -ItemType Directory -Force bin, build\dev, gen | Out-Null
 
 Step 'terminal sprites (gen\sprites.h)'    { python tools\gen_sprites.py }

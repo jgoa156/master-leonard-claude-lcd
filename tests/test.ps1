@@ -98,6 +98,15 @@ $pp = Private-Procs | Select-Object -First 1
 Check 'a second double-click brings the same window back (same process, sessions kept)' ($pp -and $pp.Id -eq $pid1 -and [W.U]::IsWindowVisible($pp.MainWindowHandle) -and @(Private-Procs).Count -eq 1)
 Stop-App; Start-Process $exe -ArgumentList '--background'; Start-Sleep 2               # hidden private instance for the sections below
 
+"== scripted mood: leonard.exe --set <mood> [id]"
+& $exe --set alert scripted; Start-Sleep -Milliseconds 500
+Check '--set alert shows alert' ((Status) -like 'alert *')
+& $exe --set dead scripted; Start-Sleep -Milliseconds 500
+Check '--set dead shows dead' ((Status) -like 'dead *')
+$bad = Start-Process $exe -ArgumentList '--set', 'bogus', 'scripted' -Wait -PassThru     # GUI exe: wait explicitly to read its exit code
+Check 'an unknown mood is refused (exit 2, nothing sent)' ($bad.ExitCode -eq 2) "exit $($bad.ExitCode)"
+Send-Hook SessionEnd scripted; Start-Sleep -Milliseconds 300
+
 "== moods from simulated hook events"
 $seq = @(
   @('no sessions',               @(),                                              'sleepy'),

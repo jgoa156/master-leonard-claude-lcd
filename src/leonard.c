@@ -388,6 +388,12 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--preview")) preview = 1;
         if (!strcmp(argv[i], "--background")) preview = 0;           /* hidden: no window, no console (the startup shortcut) */
         if (!strcmp(argv[i], "--stale") && i + 1 < argc) STALE_MS = atol(argv[++i]) * 1000L;
+        if (!strcmp(argv[i], "--set") && i + 1 < argc) {       /* scripted mood: leonard.exe --set <mood> [id]  (id defaults to "cli") */
+            int ok = 0; for (int k = 0; k < NSTATE; k++) if (!strcmp(argv[i + 1], SNAME[k])) ok = 1;
+            if (!ok) return 2;                                 /* unknown mood: nothing sent (exit code 2) */
+            char msg[160]; snprintf(msg, sizeof msg, "%s %s", i + 2 < argc ? argv[i + 2] : "cli", argv[i + 1]);
+            WSADATA w; WSAStartup(MAKEWORD(2, 2), &w); net_send(msg); return 0;
+        }
         if (!strcmp(argv[i], "--stop")) { WSADATA w; WSAStartup(MAKEWORD(2, 2), &w); net_send("ctl quit"); return 0; }
     }
     if (!net_init()) {                                        /* a copy is already running: only one instance at a time */

@@ -43,8 +43,8 @@ Dead is always centred. `leonard.exe --no-follow` turns this off (the head then 
 .\tests\test.ps1 -Real -Audio  # full test (-Real: two short headless Claude sessions; -Audio: two quiet test tones)
 ```
 
-`leonard.exe` modes: *(none)* background app Â· `--hook` the Claude Code hook (reads JSON on stdin, sends one UDP
-packet, exits in ~6 ms) Â· `--preview` Â· `--stop` Â· `--stale N` Â· `--no-follow` Â· `--dump mood dir out.ppm [ms]`.
+`leonard.exe` modes: *(none)* show the window · `--background` hidden, no window (the startup shortcut uses it) · `--hook` the Claude Code hook (reads JSON on stdin, sends one UDP
+packet, exits in ~6 ms) · `--set <mood> [id]` set a mood from a script, no Claude needed (`id` defaults to `cli`; unknown mood -> exit 2) · `--stop` · `--stale N` · `--no-follow` · `--no-audio` · `--meter N` · `--dump mood dir out.ppm [ms]`.
 
 - Double-clicking (or `--preview`) while a copy is already running just brings **that** copy's window up, so it keeps its
   sessions. The window's X only **hides** it (the app keeps listening, e.g. after a login start); `q` / Esc in the window
