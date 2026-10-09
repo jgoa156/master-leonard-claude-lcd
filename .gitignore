@@ -1,0 +1,17 @@
+# build output (rebuilt by build.ps1)
+bin/
+build/
+gen/
+__pycache__/
+*.pyc
+
+# third-party artwork and everything derived from it: NOT redistributable, supply your own
+assets/source/*
+!assets/source/README.md
+assets/art/*
+!assets/art/README.md
+docs/previews/
+legacy/skull/
+
+# vendor documentation excerpts
+docs/hardware/
