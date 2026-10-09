@@ -6,6 +6,8 @@
  *   leonard.exe                        (a double-click) show the window; a copy already running just shows its own. Listens for Claude
  *                                      Code sessions and renders the 480x320 frame (the USB panel output
  *                                      plugs in at the marked spot in main)
+ *   (the window has no title bar: drag it by its picture; the close button is an invisible hot corner at the top
+ *    right that shows an ASCII x in #dc4583 only while the mouse is over it, and hides the window - the app keeps running)
  *   leonard.exe --hook                 the Claude Code hook: reads the hook JSON on stdin, sends
  *                                      "<session_id> <mood>" to 127.0.0.1:47474, exits in a few ms
  *   leonard.exe --preview              show a 2x preview window; replaces a running copy. The X hides the window\r\n *                                      (the app keeps running); keys 1-7 force a mood for 15 s,
@@ -105,6 +107,29 @@ static unsigned char FB[PANEL_H][PANEL_W][3];               /* RGB frame */
 
 static float clampf(float v, float a, float b) { return v < a ? a : v > b ? b : v; }
 
+/* ---- session tally: ASCII, in the free strip at the bottom. One '|' per open Claude session; at five, a '/' is
+ *      laid across the four (prison-style groups). Always centred; nothing when no session is open. */
+static void tblit(const unsigned char *g, int gw, int gh, int x0, int y0, const float ink[3]) {
+    for (int y = 0; y < gh; y++) for (int x = 0; x < gw; x++) {
+        int X = x0 + x, Y = y0 + y; unsigned char v = g[y * gw + x];
+        if (!v || X < 0 || Y < 0 || X >= PANEL_W || Y >= PANEL_H) continue;
+        for (int q = 0; q < 3; q++) { int c = (int)(v * ink[q]); if (c > FB[Y][X][q]) FB[Y][X][q] = (unsigned char)c; }
+    }
+}
+static void tally(int n, const float ink[3]) {
+    if (n <= 0) return;
+    if (n > 40) n = 40;
+    int groups = (n + 4) / 5, cells = 0;
+    for (int g = 0; g < groups; g++) cells += n - g * 5 >= 5 ? 4 : n - g * 5;
+    int x = PANEL_W / 2 - (cells + groups - 1) * TALLY_CW / 2;          /* groups are separated by one blank cell */
+    for (int g = 0; g < groups; g++) {
+        int k = n - g * 5 >= 5 ? 4 : n - g * 5;
+        for (int i = 0; i < k; i++) tblit(TALLY_BAR, TALLY_CW, TALLY_H, x + i * TALLY_CW, TALLY_Y, ink);
+        if (n - g * 5 >= 5) tblit(TALLY_STRIKE, TALLY_SW, TALLY_SH, x + 2 * TALLY_CW - TALLY_SW / 2, TALLY_Y + TALLY_H / 2 - TALLY_SH / 2, ink);
+        x += (k + 1) * TALLY_CW;
+    }
+}
+
 /* ---- thicker strokes for the main (white / red) skull. The ghosts keep the thin original.
  * THICK 0 = as baked, 1 = about 2 px strokes (4 neighbours), 2 = about 3 px strokes (all 8 neighbours). */
 #ifndef THICK
@@ -136,6 +161,19 @@ static void thick_init(void) {
  *      white one, each as bright and as far out as its channel is loud. LEV = smoothed levels 0..1. */
 static float LEV[2], RAW[2];                               /* smoothed 0..1 levels, and the last raw peaks */
 static const float GHOST_CYAN = 0.70f;                           /* the cyan copy shines a bit less than the #dc4583 one */
+/* glitch: on each beat the ghosts jump to a random offset and a few horizontal slices of them shear sideways,
+ * for ~0.1-0.2 s, then they snap back. Only the ghosts move; the white skull stays put. */
+static float GLX[2], GLY[2]; static int GBN, GB[4][3]; static long GLITCH_UNTIL, GLITCH_COOL;
+static void glitch_kick(long t) {
+    float sc = PANEL_W / 800.0f;
+    for (int i = 0; i < 2; i++) { GLX[i] = (float)(rand() % 33 - 16) * sc; GLY[i] = (float)(rand() % 9 - 4) * sc; }
+    GBN = 1 + rand() % 3;
+    for (int b = 0; b < GBN; b++) {
+        int h = (int)((6 + rand() % 26) * sc); if (h < 2) h = 2;
+        GB[b][0] = rand() % (PANEL_H - h); GB[b][1] = GB[b][0] + h; GB[b][2] = (int)((rand() % 2 ? 1 : -1) * (8 + rand() % 22) * sc);
+    }
+    GLITCH_UNTIL = t + 90 + rand() % 90;
+}
 static const float GHOST_R[3] = {220 / 255.0f, 69 / 255.0f, 131 / 255.0f};   /* right-channel ghost: #dc4583 */
 static unsigned char GH[3][PANEL_H][PANEL_W];                 /* per pose: the skull's glow (sharp lines + soft halo) */
 /* system audio level, per channel: the default output device's peak meter. Re-opened every few seconds so a
@@ -175,6 +213,10 @@ static void audio_poll(long t) {
                   FAILED(METER->lpVtbl->GetChannelsPeakValues(METER, ch > 8 ? 8 : ch, pk)))) { audio_close(); ch = 0; }
     float in[2] = {ch ? pk[0] : 0, ch > 1 ? pk[1] : (ch ? pk[0] : 0)};
     RAW[0] = in[0]; RAW[1] = in[1];
+    {   static float slow; float e = fmaxf(in[0], in[1]);                /* a beat: the level jumps above its recent average */
+        if (e > 0.08f && e > slow * 1.35f + 0.06f && t >= GLITCH_COOL) { glitch_kick(t); GLITCH_COOL = t + 180; }
+        slow += (e - slow) * 0.04f;
+    }
     for (int i = 0; i < 2; i++) {                           /* jump up fast, fade out slowly */
         float v = clampf(in[i] * 1.25f, 0, 1);
         LEV[i] += (v - LEV[i]) * (v > LEV[i] ? 0.6f : 0.10f);
@@ -185,7 +227,7 @@ static void ghost_init(void) {
     static float a[PANEL_H][PANEL_W], b[PANEL_H][PANEL_W];
     const int R = PANEL_W >= 800 ? 4 : 3;
     for (int p = 0; p < 3; p++) {
-        const unsigned char *img = POSES[p].img;
+        const unsigned char *img = &TK[p][0][0];                  /* ghosts come from the thickened skull so they survive a small window */
         for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) a[y][x] = img[y * PANEL_W + x] / 255.0f;
         for (int pass = 0; pass < 2; pass++) {                /* two box blurs ~ a soft glow */
             for (int y = 0; y < PANEL_H; y++) { float acc = 0; for (int x = -R; x < PANEL_W + R; x++) {
@@ -235,14 +277,23 @@ static void compose(const Av *a, long t) {
     int pi = (a->state == DEAD ? 0 : a->dir) + 1;
     float sc = PANEL_W / 800.0f, L = LEV[0], Rt = LEV[1];
     int oxL = (int)lroundf((3 + 9 * L) * sc), oxR = (int)lroundf((3 + 9 * Rt) * sc);   /* louder = further out */
-    for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) {
-        float c = (L  > 0.01f && x + oxL < PANEL_W) ? GH[pi][y][x + oxL] / 255.0f * L * GHOST_CYAN : 0;    /* cyan copy, shifted left   */
-        float m = (Rt > 0.01f && x - oxR >= 0)      ? GH[pi][y][x - oxR] / 255.0f * Rt : 0;    /* magenta copy, shifted right */
+    int gl = t < GLITCH_UNTIL;                                /* a beat just hit: the ghosts are displaced */
+    float bl = powf(L, 0.75f), br = powf(Rt, 0.75f), boost = gl ? 1.3f : 1.0f;     /* brighter at low levels, flash on a beat */
+    for (int y = 0; y < PANEL_H; y++) {
+        int bdx = 0;
+        if (gl) for (int b = 0; b < GBN; b++) if (y >= GB[b][0] && y < GB[b][1]) bdx = GB[b][2];
+        int ycl = gl ? y - (int)GLY[0] : y, ycr = gl ? y - (int)GLY[1] : y;
+        int dxl = (gl ? (int)GLX[0] : 0) + bdx, dxr = (gl ? (int)GLX[1] : 0) + bdx;
+        for (int x = 0; x < PANEL_W; x++) {
+        int sxl = x + oxL - dxl, sxr = x - oxR - dxr;
+        float c = (L  > 0.01f && sxl >= 0 && sxl < PANEL_W && ycl >= 0 && ycl < PANEL_H) ? GH[pi][ycl][sxl] / 255.0f * bl * GHOST_CYAN * boost : 0;  /* cyan, left  */
+        float m = (Rt > 0.01f && sxr >= 0 && sxr < PANEL_W && ycr >= 0 && ycr < PANEL_H) ? GH[pi][ycr][sxr] / 255.0f * br * boost : 0;               /* #dc4583, right */
         float bg[3] = {m * GHOST_R[0], c + m * GHOST_R[1], c + m * GHOST_R[2]};   /* cyan (0,1,1) + #dc4583 */
         unsigned char g = TK[pi][y][x];                       /* the skull: the thick version */
         for (int q = 0; q < 3; q++) {
-            float v = fmaxf(clampf(bg[q], 0, 1) * 255 * 0.9f, g * ink[q]);    /* the skull is drawn over its ghosts */
+            float v = fmaxf(clampf(bg[q], 0, 1) * 255, g * ink[q]);    /* the skull is drawn over its ghosts */
             FB[y][x][q] = (unsigned char)clampf(v, 0, 255);
+        }
         }
     }
     float m = av_pulse(a, t), glow[3], hot[3];
@@ -260,6 +311,7 @@ static void compose(const Av *a, long t) {
                 if (core(a->state, a->blink, dx, dy, rx, ry, sx)) lit(x, y, hot, 0.55f + 0.45f * m);
             }
     }
+    tally(a->sessions, ink);                                  /* one slash per open session, centred on top */
 }
 
 /* ------------------------------------------------------------ Claude sessions (leonard_hook.exe -> UDP) */
@@ -326,19 +378,41 @@ static int preview_px(double cm) {
     return (int)lround(cm / 2.54 * (dpi > 0 ? dpi : 96));
 }
 static BITMAPINFO BI; static unsigned int PIX[PANEL_H][PANEL_W]; static int KEY = -1;
+static int CLOSE_HOVER;
+#define CLOSE_SZ 64                                          /* the hot corner, top right, in window pixels */
+static int in_close(HWND h, int sx, int sy) {                /* screen point inside the close corner? */
+    RECT r; GetWindowRect(h, &r);
+    return sx >= r.right - CLOSE_SZ && sx < r.right && sy >= r.top && sy < r.top + CLOSE_SZ;
+}
 static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
     case WM_CHAR: KEY = (int)w; return 0;
-    case WM_CLOSE: ShowWindow(h, SW_HIDE); return 0;           /* the X hides the window; the app keeps running (q / Esc quit it) */
+    case WM_NCHITTEST: {                                     /* no title bar: drag the window by its picture, except the close corner */
+        int sx = (short)LOWORD(l), sy = (short)HIWORD(l);
+        return in_close(h, sx, sy) ? HTCLIENT : HTCAPTION; }
+    case WM_LBUTTONUP: {                                     /* a click on the close corner hides the window; the app keeps running */
+        POINT p; GetCursorPos(&p);
+        if (in_close(h, p.x, p.y)) ShowWindow(h, SW_HIDE);
+        return 0; }
+    case WM_NCLBUTTONDBLCLK: case WM_NCRBUTTONDOWN: case WM_NCRBUTTONUP: return 0;     /* no maximize, no system menu */
+    case WM_CLOSE: ShowWindow(h, SW_HIDE); return 0;         /* Alt+F4 / taskbar close: hide, keep running (q / Esc quit) */
     case WM_DESTROY: PostQuitMessage(0); return 0;
+    case WM_ERASEBKGND: return 1;
     case WM_PAINT: {
         PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); RECT r; GetClientRect(h, &r);
-        SetStretchBltMode(dc, COLORONCOLOR);
+        SetStretchBltMode(dc, HALFTONE); SetBrushOrgEx(dc, 0, 0, NULL);      /* averaging when shrinking: thin lines survive */
         int cw = r.right, ch = r.bottom, dw = cw, dh = ch;
         if (cw * PANEL_H > ch * PANEL_W) dw = ch * PANEL_W / PANEL_H; else dh = cw * PANEL_H / PANEL_W;   /* fit, keep proportions */
         int dx = (cw - dw) / 2, dy = (ch - dh) / 2;
         PatBlt(dc, 0, 0, cw, ch, BLACKNESS);
         StretchDIBits(dc, dx, dy, dw, dh, 0, 0, PANEL_W, PANEL_H, PIX, &BI, DIB_RGB_COLORS, SRCCOPY);
+        if (CLOSE_HOVER) {                                   /* the close button: an ASCII X, only there (and red) while hovered */
+            HFONT f = CreateFontA(-34, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN, "Consolas");
+            HFONT old = (HFONT)SelectObject(dc, f);
+            SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(220, 69, 131));          /* a plain ASCII x in #dc4583 */
+            TextOutA(dc, cw - 28, 2, "x", 1);
+            SelectObject(dc, old); DeleteObject(f);
+        }
         EndPaint(h, &ps); return 0; }
     }
     return DefWindowProc(h, msg, w, l);
@@ -360,8 +434,10 @@ int main(int argc, char **argv) {
 
     if (dump) {                                           /* --dump state dir out.ppm [ms] */
         a.state = st; a.dir = argc > ai + 1 ? atoi(argv[ai + 1]) : 0;
-        ghost_init(); thick_init();
+        thick_init(); ghost_init();
         if (argc > ai + 5) { LEV[0] = (float)atof(argv[ai + 4]); LEV[1] = (float)atof(argv[ai + 5]); }   /* audio levels to show */
+        if (argc > ai + 6) a.sessions = atoi(argv[ai + 6]);                    /* ... [L R [sessions [glitch]]] */
+        if (argc > ai + 7 && atoi(argv[ai + 7])) { srand(7); glitch_kick(a.t0); GLITCH_UNTIL = a.t0 + 3600000L; }
         compose(&a, a.t0 + (argc > ai + 3 ? atol(argv[ai + 3]) : 0));
         FILE *f = fopen(argc > ai + 2 ? argv[ai + 2] : "frame.ppm", "wb"); if (!f) return 1;
         fprintf(f, "P6 %d %d 255\n", PANEL_W, PANEL_H); fwrite(FB, 1, sizeof FB, f); fclose(f);
@@ -402,7 +478,7 @@ int main(int argc, char **argv) {
     }
     rt_init();
     { FILE *f = rt_fopen("events.log", "w"); if (f) fclose(f); }   /* fresh event log per run */
-    ghost_init(); thick_init();
+    thick_init(); ghost_init();
     if (audio) CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
     HWND hw = NULL;
@@ -410,9 +486,9 @@ int main(int argc, char **argv) {
         WNDCLASS wc = {0}; wc.lpfnWndProc = wndproc; wc.hInstance = GetModuleHandle(NULL); \
         wc.lpszClassName = "impure_panel"; wc.hCursor = LoadCursor(NULL, IDC_ARROW); \
         RegisterClass(&wc); \
-        RECT wr = {0, 0, preview_px(PREVIEW_W_CM), preview_px(PREVIEW_H_CM)}; AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE); \
-        hw = CreateWindow("impure_panel", "Master Leonard", WS_OVERLAPPEDWINDOW | WS_VISIBLE, \
-                          CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top, NULL, NULL, wc.hInstance, NULL); \
+        int ww = preview_px(PREVIEW_W_CM), wh = preview_px(PREVIEW_H_CM); \
+        hw = CreateWindow("impure_panel", "Master Leonard", WS_POPUP | WS_VISIBLE, \
+                          (GetSystemMetrics(SM_CXSCREEN) - ww) / 2, (GetSystemMetrics(SM_CYSCREEN) - wh) / 2, ww, wh, NULL, NULL, wc.hInstance, NULL); \
         BI.bmiHeader.biSize = sizeof BI.bmiHeader; BI.bmiHeader.biWidth = PANEL_W; BI.bmiHeader.biHeight = -PANEL_H; \
         BI.bmiHeader.biPlanes = 1; BI.bmiHeader.biBitCount = 32; BI.bmiHeader.biCompression = BI_RGB; \
     } while (0)
@@ -442,6 +518,8 @@ int main(int argc, char **argv) {
             a.dir = cur_dir;
         }
         if (a.state == DEAD) a.dir = 0;                      /* dead: centred, never follows */
+        a.sessions = NS;
+        if (hw && IsWindowVisible(hw)) { POINT cp; GetCursorPos(&cp); CLOSE_HOVER = in_close(hw, cp.x, cp.y); } else CLOSE_HOVER = 0;
         compose(&a, t);                                      /* FB = the 480x320 frame: THE USB PANEL OUTPUT GOES HERE */
         {   /* status file: shown mood + every session's own mood, rewritten whenever any of it changes */
             char sig[2048]; static const char *LOOK[3] = {"left", "center", "right"};

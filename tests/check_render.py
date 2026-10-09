@@ -1,4 +1,4 @@
-﻿# Pixel-level check of leonard.exe frames: every mood x pose, the alert blink and the dead goat.
+# Pixel-level check of leonard.exe frames: every mood x pose, the alert blink and the dead goat.
 #   python tests\check_render.py   -> prints PASS/FAIL per check, writes build\render_check.png
 import os, subprocess, tempfile
 from PIL import Image
@@ -11,9 +11,11 @@ MOODS = {"idle": (255, 150, 0), "thinking": (51, 214, 255), "speaking": (255, 23
          "happy": (93, 255, 122), "alert": (255, 30, 30), "sleepy": (150, 100, 20), "dead": (210, 20, 20)}
 bad = 0
 
-def frame(mood, d, ms=0, lev=None):
+def frame(mood, d, ms=0, lev=None, sessions=None):
     p = os.path.join(tmp, "f.ppm")
-    subprocess.run([EXE, "--dump", mood, str(d), p, str(ms)] + ([str(lev[0]), str(lev[1])] if lev else []), check=True)
+    extra = [str(lev[0]), str(lev[1])] if lev else (["0", "0"] if sessions is not None else [])
+    if sessions is not None: extra.append(str(sessions))
+    subprocess.run([EXE, "--dump", mood, str(d), p, str(ms)] + extra, check=True)
     return np.asarray(Image.open(p).convert("RGB"), np.float32)
 
 def check(name, ok, detail=""):
@@ -83,6 +85,42 @@ ratio_ok = len(gr) > 2000 and abs(got[0] / got[2] - want[0] / want[2]) < 0.35 an
 check("right channel: a #dc4583 ghost", ratio_ok, f"{len(gr)} px, mean RGB {got.round().astype(int).tolist()} (hue of 220,69,131)")
 lx = np.nonzero(((sl.max(2) - sl.min(2)) > 25) & ~eyes_mask)[1].mean(); rx = np.nonzero(((sr.max(2) - sr.min(2)) > 25) & ~eyes_mask)[1].mean()
 check("cyan sits left of the skull, #dc4583 right of it", lx < rx, f"ghost centres x {lx:.0f} / {rx:.0f}")
+# session tally: ASCII '|' per session, four + a strike for the fifth, centred in the free strip at the bottom
+def frame7(mood, d, ms, lev, sessions, glitch):
+    p = os.path.join(tmp, "f.ppm")
+    subprocess.run([EXE, "--dump", mood, str(d), p, str(ms), str(lev[0]), str(lev[1]), str(sessions), str(glitch)], check=True)
+    return np.asarray(Image.open(p).convert("RGB"), np.float32)
+base = frame("idle", 0, 0, (0, 0), 0)
+def lit(n, d=0):
+    return (np.abs(frame("idle", d, 0, (0, 0), n) - base).max(2) > 40)
+def runs(line):
+    return int(((line[1:] & ~line[:-1]).sum()) + (1 if line[0] else 0))
+check("the bottom strip is free for the tally (no goat there)", float(base[int(0.915 * H):].max()) < 30, f"brightest {float(base[int(0.915 * H):].max()):.0f}")
+check("0 sessions: no tally", int(lit(0).sum()) == 0)
+ys4, xs4 = np.nonzero(lit(4)); row = (ys4.min() + ys4.max()) // 2
+for n in (1, 2, 3, 4):
+    m = lit(n)
+    check(f"{n} session(s): {n} ASCII slash(es)", runs(m[row]) == n, f"{runs(m[row])} on the middle row")
+check("tally sits in the bottom strip", ys4.min() > 0.85 * H, f"top of the tally at y={ys4.min()} of {H}")
+check("tally is small (under 8% of the frame height)", (ys4.max() - ys4.min()) < 0.08 * H, f"{ys4.max() - ys4.min() + 1} px tall")
+for n in (1, 4, 5, 6, 13):
+    for d in (-1, 0, 1):
+        ys, xs = np.nonzero(lit(n, d)); cx = (xs.min() + xs.max()) / 2
+        check(f"{n:2d} sessions, pose {d:+d}: tally centred", abs(cx - W / 2) <= 6, f"centre x {cx:.0f} (frame centre {W/2:.0f})")
+m4, m5, m6 = lit(4), lit(5), lit(6)
+w = lambda m: np.nonzero(m)[1].max() - np.nonzero(m)[1].min()
+check("5th session = a strike across the 4 slashes", int(m5.sum()) > int(m4.sum()) + 40 and w(m5) > w(m4) + 4, f"lit px {int(m4.sum())} -> {int(m5.sum())}, width {w(m4)} -> {w(m5)}")
+check("6th session = a new group starts (wider again)", int(m6.sum()) > int(m5.sum()) and w(m6) > w(m5))
+red = frame("alert", 0, 600, (0, 0), 3)[int(0.85 * H):]
+check("the tally follows the alert blink colour (red phase)", float(red[..., 0].max()) > 150 and float(red[..., 1].max()) < 80)
+
+# glitch: on a beat the ghosts jump and slices shear sideways; the skull itself never moves
+n0, g0 = frame7("idle", 0, 0, (0, 0), 0, 0), frame7("idle", 0, 0, (0, 0), 0, 1)
+check("glitch never moves the skull (silence: identical frames)", bool((n0 == g0).all()))
+n7, g7 = frame7("idle", 0, 0, (0.7, 0.7), 0, 0), frame7("idle", 0, 0, (0.7, 0.7), 0, 1)
+diff = int((np.abs(n7 - g7).max(2) > 30).sum())
+check("on a beat the ghosts are displaced (glitch)", diff > 3000, f"{diff} px moved")
+
 # the pulse: the more the channel is playing, the more the ghost glows (monotonic from silence to full)
 def ghost_light(lv):
     g = np.clip(frame("idle", 0, 0, (lv, lv)) - s0, 0, None); return float(g.mean())

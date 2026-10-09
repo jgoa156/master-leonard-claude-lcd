@@ -36,7 +36,7 @@ static inline int look_dir(int cur, int x, int w) {
     return cur;
 }
 
-typedef struct { int state, dir, blink, dots; long next_look, next_blink, blink_end, t0; } Av;
+typedef struct { int state, dir, blink, dots, sessions; long next_look, next_blink, blink_end, t0; } Av;
 
 static int rnd(int a, int b) { return a + rand() % (b - a + 1); }
 

@@ -1,4 +1,4 @@
-﻿# Master Leonard
+# Master Leonard
 
 A ram-skull avatar for a small USB panel (5" 800x480, or 3.5" 480x320). Its eyes show what your Claude Code
 sessions are doing, and its head follows your mouse. One exe does everything: `bin\leonard.exe`.
@@ -27,11 +27,20 @@ still working; happy / speaking last about 6 s, then that session counts as idle
 silent for 2 minutes (Esc, closed window, crash: Claude Code has no hook for those) settles to idle. Dead clears when
 that session sends its next event, i.e. when credits are back.
 
-**Audio ghosts.** Behind the white skull, a **cyan** copy glows with the **left** audio channel and a **#dc4583** copy with the **right** one: louder = brighter and further out, silence = no ghosts. The level is Windows' own output meter for the default speakers / headphones (what's playing; no microphone, no recording). `--no-audio` turns it off; `leonard.exe --meter 3` records the raw left / right levels for 3 s into `meter.txt`.
+**Audio ghosts.** Behind the white skull, a **cyan** copy glows with the **left** audio channel and a **#dc4583** copy with the **right** one: louder = brighter and further out, silence = no ghosts. The level is Windows' own output meter for the default speakers / headphones (what's playing; no microphone, no recording). `--no-audio` turns it off; `leonard.exe --meter 3` records the raw left / right levels for 3 s into `meter.txt`. On every beat (a sudden jump in level)
+the ghosts glitch: they jump to a random offset and a few horizontal slices shear sideways for ~0.15 s; the white skull
+never moves.
 
 **The head follows the mouse.** The primary monitor is cut into three vertical slices; the head looks left, centre or
 right depending on where the cursor is (a cursor on another monitor counts as left / right of the primary one).
 Dead is always centred. `leonard.exe --no-follow` turns this off (the head then glances around by mood).
+
+**Session tally.** In a free strip at the bottom, centred: one ASCII `|` per open Claude session; four of them, and the
+fifth strikes them through (prison-style tally groups). Nothing is shown when no session is open.
+
+**The window** has no title bar: drag it by its picture. Its close button is an invisible hot corner at the top right,
+which shows an ASCII `x` in #dc4583 only while the mouse is over it, and **hides** the window (the app keeps listening; a
+double-click brings it back). The window is 12 x 7 cm on screen, with the 800x400 frame scaled to fit.
 
 ## Use
 
@@ -47,8 +56,8 @@ Dead is always centred. `leonard.exe --no-follow` turns this off (the head then 
 packet, exits in ~6 ms) · `--set <mood> [id]` set a mood from a script, no Claude needed (`id` defaults to `cli`; unknown mood -> exit 2) · `--stop` · `--stale N` · `--no-follow` · `--no-audio` · `--meter N` · `--dump mood dir out.ppm [ms]`.
 
 - Double-clicking (or `--preview`) while a copy is already running just brings **that** copy's window up, so it keeps its
-  sessions. The window's X only **hides** it (the app keeps listening, e.g. after a login start); `q` / Esc in the window
-  quit the app; keys 1-7 force a mood for 15 s (`a` = automatic again). The window is 12 x 7 cm on screen.
+  sessions. Closing the window (the hot corner, or Alt+F4) only hides it; `q` / Esc in the window quit the app; keys 1-7
+  force a mood for 15 s (`a` = automatic again).
 - `--hook` only acts when hook data is piped in (which is how Claude Code calls it). Typed by hand it is ignored, so
   `leonard.exe --hook --preview` simply opens the preview.
 

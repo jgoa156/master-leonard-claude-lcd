@@ -96,6 +96,47 @@ Check 'closing the window hides it' (-not [W.U]::IsWindowVisible((Private-Procs 
 Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', "& '$exe'"; Start-Sleep 2.5
 $pp = Private-Procs | Select-Object -First 1
 Check 'a second double-click brings the same window back (same process, sessions kept)' ($pp -and $pp.Id -eq $pid1 -and [W.U]::IsWindowVisible($pp.MainWindowHandle) -and @(Private-Procs).Count -eq 1)
+"== the window: no title bar, a hot-corner close button (this part moves your mouse for a second and puts it back)"
+Add-Type -AssemblyName System.Drawing
+Add-Type -Namespace W -Name N -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool GetWindowRect(System.IntPtr h, out RECT r);
+[DllImport("user32.dll")] public static extern int GetWindowLong(System.IntPtr h, int i);
+[DllImport("user32.dll")] public static extern bool PrintWindow(System.IntPtr h, System.IntPtr dc, uint f);
+[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+[DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, uint d, System.IntPtr e);
+public struct RECT { public int L, T, R, B; }
+'@
+function Grab($h) {                                       # the window's own pixels (PrintWindow: not what is on top of it)
+  $r = New-Object W.N+RECT; [W.N]::GetWindowRect($h, [ref]$r) | Out-Null; $w = $r.R - $r.L; $hh = $r.B - $r.T
+  $bmp = New-Object System.Drawing.Bitmap $w, $hh; $g = [System.Drawing.Graphics]::FromImage($bmp); $dc = $g.GetHdc()
+  [W.N]::PrintWindow($h, $dc, 2) | Out-Null; $g.ReleaseHdc($dc); $g.Dispose()
+  $red = 0; for ($y = 0; $y -lt [Math]::Min(70, $hh); $y += 1) { for ($x = [Math]::Max(0, $w - 70); $x -lt $w; $x += 1) { $c = $bmp.GetPixel($x, $y); if ($c.R -gt 150 -and $c.G -lt 120 -and $c.B -gt 80 -and $c.B -lt 200) { $red++ } } }
+  $bmp.Dispose(); return @{ Red = $red; L = $r.L; T = $r.T; R = $r.R; B = $r.B }
+}
+function Put-Cursor($x, $y) {                             # $true only if the cursor really stayed there (a person may be using the mouse)
+  for ($i = 0; $i -lt 6; $i++) { [W.N]::SetCursorPos($x, $y) | Out-Null; Start-Sleep -Milliseconds 350; $p = [Windows.Forms.Cursor]::Position; if ([Math]::Abs($p.X - $x) -le 3 -and [Math]::Abs($p.Y - $y) -le 3) { return $true } }
+  return $false
+}
+Add-Type -AssemblyName System.Windows.Forms
+$origPos = [Windows.Forms.Cursor]::Position
+$pp = Private-Procs | Select-Object -First 1
+if (-not $pp -or -not [W.U]::IsWindowVisible($pp.MainWindowHandle)) { Start-Process $exe -ArgumentList '--preview'; Start-Sleep 2.5; $pp = Private-Procs | Select-Object -First 1 }
+$style = [W.N]::GetWindowLong($pp.MainWindowHandle, -16)
+Check 'the window has no title bar' (($style -band 0xC00000) -eq 0) ("style 0x{0:X}" -f $style)
+$g0 = Grab $pp.MainWindowHandle
+Check 'the window is 12 x 7 cm (454 x 265 px at 96 DPI)' ([Math]::Abs(($g0.R - $g0.L) - 454) -le 2 -and [Math]::Abs(($g0.B - $g0.T) - 265) -le 2) "$($g0.R - $g0.L) x $($g0.B - $g0.T)"
+if (Put-Cursor ($g0.R - 20) ($g0.T + 20)) {
+  $g1 = Grab $pp.MainWindowHandle
+  Check 'hovering the top-right corner shows the ASCII x in #dc4583' ($g1.Red -gt 30) "$($g1.Red) magenta px"
+  if (Put-Cursor (($g0.L + $g0.R) / 2) (($g0.T + $g0.B) / 2)) { $g2 = Grab $pp.MainWindowHandle; Check 'the x is invisible (transparent) when the mouse is away' ($g2.Red -eq 0) "$($g2.Red) magenta px" }
+  else { "[SKIP] X invisible when away  (the mouse was in use)" }
+  if (Put-Cursor ($g0.R - 20) ($g0.T + 20)) {
+    [W.N]::mouse_event(0x2, 0, 0, 0, [IntPtr]::Zero); [W.N]::mouse_event(0x4, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 600
+    $pp2 = Private-Procs | Select-Object -First 1
+    Check 'clicking the corner hides the window; the app keeps running' ($pp2 -and -not [W.U]::IsWindowVisible($pp2.MainWindowHandle))
+  } else { "[SKIP] click on the close corner  (the mouse was in use)" }
+} else { "[SKIP] hover / click checks  (the mouse was in use)" }
+[W.N]::SetCursorPos($origPos.X, $origPos.Y) | Out-Null
 Stop-App; Start-Process $exe -ArgumentList '--background'; Start-Sleep 2               # hidden private instance for the sections below
 
 "== scripted mood: leonard.exe --set <mood> [id]"
