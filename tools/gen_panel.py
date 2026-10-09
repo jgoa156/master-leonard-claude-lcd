@@ -1,15 +1,16 @@
-# Bake the three poses to 480x320 panel bitmaps -> panel.h (for impure_panel.c)
+﻿# Bake the three poses to panel bitmaps (default 800x480 = the 5" panel; pass W H for another size, e.g. 480 320) -> panel.h (for impure_panel.c)
 #   python gen_panel.py
 # Each pose is drawn crisply in Consolas at CW x CH px per cell, cropped to the
 # art, scaled to fit the panel (LANCZOS) and centred: the scaled-down look.
 # Eye sockets (from gen_sprites.EYES, in cells) are mapped to panel pixels.
-import os
+import os, sys
 from PIL import Image, ImageDraw, ImageFont
 import gen_sprites as gs
 
 import paths as P
-PW, PH = 480, 320
+PW, PH = (int(sys.argv[1]), int(sys.argv[2])) if len(sys.argv) >= 3 else (800, 480)      # python tools\gen_panel.py [W H]
 MARGIN = 4
+GAIN = 1.7
 CW, CH = 11, 22
 font = ImageFont.truetype("consola.ttf", 20)
 
@@ -25,6 +26,7 @@ def bake(rows, eyes):
     s = min((PW - 2 * MARGIN) / big.width, (PH - 2 * MARGIN) / big.height)
     small = big.resize((round(big.width * s), round(big.height * s)), Image.LANCZOS)
     ox, oy = (PW - small.width) // 2, (PH - small.height) // 2
+    if PW > 480: small = small.point(lambda v: min(255, int(v * GAIN)))        # thin strokes read fainter on the bigger panel; 480x320 stays as approved
     img = Image.new("L", (PW, PH)); img.paste(small, (ox, oy))
     peyes = [(ox + (c + 0.5 - c0) * CW * s, oy + (r + 0.5 - r0) * CH * s, wx * CW * s, wy * CH * s)
              for c, r, wx, wy in eyes]

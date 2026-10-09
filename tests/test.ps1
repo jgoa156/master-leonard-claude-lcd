@@ -1,7 +1,8 @@
 ﻿# test.ps1 - full test of Master Leonard (single exe: bin\leonard.exe).
 #   .\tests\test.ps1 [-Real]
 # -Real also runs two short headless Claude Code sessions (uses a few hundred tokens).
-param([switch]$Real)
+# -Audio plays two short quiet test tones (left, then right) and checks the audio ghosts hear the right channel.
+param([switch]$Real, [switch]$Audio)
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 $exe = Join-Path $root 'bin\leonard.exe'
@@ -21,14 +22,16 @@ function Stop-App { if (Test-Path $exe) { & $exe --stop }; Start-Sleep -Millisec
 
 "== layout"
 Check 'single exe exists' (Test-Path $exe) ("{0:N0} KB" -f ((Get-Item $exe).Length / 1KB))
-Check 'no stray files in the project root' (@(Get-ChildItem $root -File | Where-Object { $_.Name -notin 'build.ps1', 'install.ps1', 'README.md' }).Count -eq 0)
+Check 'the art is plain text in assets\art (right.txt, front.txt)' ((Test-Path assets\art\right.txt) -and (Test-Path assets\art\front.txt))
+Check 'no image files anywhere in the project' (@(Get-ChildItem $root -Recurse -File -Include *.png,*.jpg,*.gif -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '\\(build|docs|legacy)\\' }).Count -eq 0)
+Check 'no stray files in the project root' (@(Get-ChildItem $root -File | Where-Object { $_.Name -notin 'build.ps1', 'install.ps1', 'README.md', '.gitignore' }).Count -eq 0)
 
 "== installation"
 $cfg = Get-Content (Join-Path $env:USERPROFILE '.claude\settings.json') -Raw | ConvertFrom-Json
 $expected = ($exe -replace '\\', '/') + ' --hook'
-$events = 'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Notification','Stop','SubagentStop','PreCompact','SessionEnd'
+$events = 'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Notification','Stop','StopFailure','SubagentStop','PreCompact','SessionEnd'
 $wrong = @($events | Where-Object { -not ($cfg.hooks.$_ | ForEach-Object { $_.hooks } | Where-Object { $_.command -eq $expected }) })
-Check 'settings.json has all 9 hooks -> leonard.exe --hook' ($wrong.Count -eq 0) ($wrong -join ',')
+Check 'settings.json has all 10 hooks -> leonard.exe --hook' ($wrong.Count -eq 0) ($wrong -join ',')
 Check 'no leftover hooks from the old names' (-not ((Get-Content (Join-Path $env:USERPROFILE '.claude\settings.json') -Raw) -match 'phillip|leonard_hook'))
 Check 'startup shortcut exists' (Test-Path $lnk)
 if (Test-Path $lnk) { Check 'startup shortcut targets bin\leonard.exe' (((New-Object -ComObject WScript.Shell).CreateShortcut($lnk)).TargetPath -eq $exe) }
@@ -37,12 +40,8 @@ if (Test-Path $lnk) { Check 'startup shortcut targets bin\leonard.exe' (((New-Ob
 foreach ($d in -1, 0, 1) {
   $ppm = Join-Path $env:TEMP 'lt.ppm'; if (Test-Path $ppm) { Remove-Item $ppm }
   Start-Process $exe -ArgumentList "--dump idle $d `"$ppm`"" -Wait          # GUI exe: PowerShell will not wait unless told
-  Check "leonard.exe --dump pose $d" ((Test-Path $ppm) -and (Get-Item $ppm).Length -eq 15 + 480 * 320 * 3)
-}
-if (Test-Path build\dev\impure.exe) {
-  $plain = (& .\build\dev\impure.exe --plain) -join "`n"
-  $txt = ((Get-Content assets\art\impure.txt) | ForEach-Object { $_.TrimEnd() }) -join "`n"
-  Check 'dev impure.exe prints the transcribed art' ($plain.TrimEnd() -eq $txt.TrimEnd())
+  $bytes = [IO.File]::ReadAllBytes($ppm); $hdr = [Text.Encoding]::ASCII.GetString($bytes, 0, 20).Split("`n")[0]; $wh = $hdr.Split(' ')
+  Check "leonard.exe --dump pose $d" ($bytes.Length -eq $hdr.Length + 1 + [int]$wh[1] * [int]$wh[2] * 3) "$($wh[1])x$($wh[2])"
 }
 
 "== background mode (as started at login)"
@@ -52,13 +51,13 @@ Start-Process $lnk; Start-Sleep 2
 $p = @(Get-Process leonard -ErrorAction SilentlyContinue)
 Check 'running after the shortcut' ($p.Count -eq 1)
 Check 'no visible window' ($p.Count -eq 1 -and $p[0].MainWindowHandle -eq 0)
-Start-Process $exe -Wait
-Check 'second launch exits (single instance)' (@(Get-Process leonard).Count -eq 1)
+Start-Process $exe -ArgumentList '--background' -Wait
+Check 'second launch (--background) exits: single instance' (@(Get-Process leonard).Count -eq 1)
 
 "== the hook (private instance)"
 Use-Isolated; Stop-App
 if (Test-Path $status) { Remove-Item $status }
-Start-Process $exe; Start-Sleep 2
+Start-Process $exe -ArgumentList '--background'; Start-Sleep 2
 Check 'private instance is up' ((Get-Process leonard -ErrorAction SilentlyContinue).Count -eq 2)
 $sw =[Diagnostics.Stopwatch]::StartNew(); Send-Hook SessionStart SPEED; $ms = $sw.ElapsedMilliseconds
 Check 'hook is fast' ($ms -lt 150) "$ms ms"; Send-Hook SessionEnd SPEED
@@ -81,14 +80,23 @@ $loginPid = (Get-Process leonard | Sort-Object StartTime | Select-Object -First 
 Stop-App                                                  # stops the private instance only
 Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', "& '$exe' --hook --preview"; Start-Sleep 3
 Check 'leonard.exe --hook --preview typed in a console opens the preview' ((Private-Procs | Where-Object { $_.MainWindowTitle -like 'Master Leonard*' }).Count -eq 1)
-Stop-App; Start-Process $exe; Start-Sleep 1.5
+Stop-App; Start-Process $exe -ArgumentList '--background'; Start-Sleep 1.5
 Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', "& '$exe' --preview"; Start-Sleep 3
-Check '--preview takes over from a running hidden copy' ((Private-Procs | Where-Object { $_.MainWindowTitle -like 'Master Leonard*' }).Count -eq 1)
+Check '--preview brings up the running hidden copy''s window' ((Private-Procs | Where-Object { $_.MainWindowTitle -like 'Master Leonard*' }).Count -eq 1)
 $pp = Private-Procs | Select-Object -First 1
 [W.U]::PostMessage($pp.MainWindowHandle, 0x10, [IntPtr]0, [IntPtr]0) | Out-Null; Start-Sleep 1
 $pp = Private-Procs | Select-Object -First 1
 Check 'closing the window hides it; the app keeps running' ($pp -and -not [W.U]::IsWindowVisible($pp.MainWindowHandle))
-Stop-App; Start-Process $exe; Start-Sleep 2               # hidden private instance for the sections below
+# a plain launch (a double-click, no arguments) must show the window: that is the whole point of the default
+Stop-App; Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', "& '$exe'"; Start-Sleep 3
+Check 'a double-click (no arguments) shows the window' ((Private-Procs | Where-Object { $_.MainWindowTitle -like 'Master Leonard*' }).Count -eq 1)
+$pp = Private-Procs | Select-Object -First 1; $pid1 = $pp.Id
+[W.U]::PostMessage($pp.MainWindowHandle, 0x10, [IntPtr]0, [IntPtr]0) | Out-Null; Start-Sleep 1
+Check 'closing the window hides it' (-not [W.U]::IsWindowVisible((Private-Procs | Select-Object -First 1).MainWindowHandle))
+Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', "& '$exe'"; Start-Sleep 2.5
+$pp = Private-Procs | Select-Object -First 1
+Check 'a second double-click brings the same window back (same process, sessions kept)' ($pp -and $pp.Id -eq $pid1 -and [W.U]::IsWindowVisible($pp.MainWindowHandle) -and @(Private-Procs).Count -eq 1)
+Stop-App; Start-Process $exe -ArgumentList '--background'; Start-Sleep 2               # hidden private instance for the sections below
 
 "== moods from simulated hook events"
 $seq = @(
@@ -129,8 +137,44 @@ Session P1 thinking; Session P2 happy; Start-Sleep 7
 Check 'happy is momentary: back to thinking after ~6 s' ((Status) -like 'thinking *'); End-All
 Check 'no sessions = sleepy, the bottom' ((Status) -like 'sleepy *')
 
+"== out of credits: dead (StopFailure)"
+function Send-Fail($id, $err) { "{`"session_id`":`"$id`",`"hook_event_name`":`"StopFailure`",`"error`":`"$err`",`"error_details`":`"x`",`"last_assistant_message`":`"API Error`"}" | & $exe --hook }
+Session P1 thinking; Send-Fail P1 billing_error;                Check 'out of credits (billing_error) -> dead'  ((Status) -like 'dead *'); End-All
+Session P1 thinking; Send-Fail P1 rate_limit;                   Check 'usage limit (rate_limit) -> dead'        ((Status) -like 'dead *'); End-All
+Session P1 thinking; Send-Fail P1 account_on_hold;              Check 'account on hold -> dead'                 ((Status) -like 'dead *'); End-All
+Session P1 thinking; Send-Fail P1 server_error;                 Check 'other API error (server_error) -> alert' ((Status) -like 'alert *'); End-All
+Session P1 alert; Session P2 thinking; Send-Fail P2 billing_error; Check 'dead is on top, above alert'          ((Status) -like 'dead *'); End-All
+Session P1 happy; Session P2 thinking; Send-Fail P2 billing_error; Check 'dead is on top, above happy'          ((Status) -like 'dead *'); End-All
+Session P1 thinking; Send-Fail P1 billing_error; Send-Hook UserPromptSubmit P1
+Check 'dead clears when that session continues (credits back)' ((Status) -like 'thinking *'); End-All
+
+"== head follows the cursor (this test moves your mouse for a second and puts it back)"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -Namespace W -Name C -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'
+$scr = [Windows.Forms.Screen]::PrimaryScreen.Bounds; $orig = [Windows.Forms.Cursor]::Position
+function Look($fx) {                                      # put the cursor there, wait, ask the app where it looks
+  for ($try = 0; $try -lt 6; $try++) {
+    $x = [int]($scr.Left + $scr.Width * $fx); $y = [int]($scr.Top + $scr.Height / 2)
+    [W.C]::SetCursorPos($x, $y) | Out-Null; Start-Sleep -Milliseconds 450
+    if ([math]::Abs([Windows.Forms.Cursor]::Position.X - $x) -le 3) { return (Status) }   # it really stayed there
+  }                                                       # a person kept moving the mouse: do not blame the app
+  return 'MOUSE-IN-USE'
+}
+function Check-Look($name, $fx, $want) { $r = Look $fx; if ($r -eq 'MOUSE-IN-USE') { "[SKIP] $name  (the mouse was in use)" } else { Check $name ($r -like "* look=$want") $r } }
+Session P1 idle
+Check-Look 'cursor in the left third -> looks left' 0.10 'left'
+Check-Look 'cursor in the centre third -> looks centre' 0.50 'center'
+Check-Look 'cursor in the right third -> looks right' 0.90 'right'
+Check-Look 'right straight to left works' 0.05 'left'
+Check-Look 'just inside the centre third stays centre' 0.40 'center'
+Send-Fail P1 billing_error; $null = Look 0.95
+Check 'dead stays centred even with the cursor on the right' ((Status) -like 'dead * look=center')
+Send-Hook UserPromptSubmit P1
+Check-Look 'head follows the cursor again once alive' 0.95 'right'
+[W.C]::SetCursorPos($orig.X, $orig.Y) | Out-Null; End-All
+
 "== interrupted session (no Stop hook exists for Esc)"
-Stop-App; Start-Process $exe -ArgumentList '--stale', '3'; Start-Sleep 2      # still the private instance
+Stop-App; Start-Process $exe -ArgumentList '--background', '--stale', '3'; Start-Sleep 2      # still the private instance
 Send-Hook SessionStart I1; Send-Hook UserPromptSubmit I1; Send-Hook PreToolUse I1
 Check 'working session shows thinking' ((Status) -like 'thinking *')
 Start-Sleep 4
@@ -140,6 +184,28 @@ Check 'it wakes up on the next event' ((Status) -like 'thinking *')
 Send-Hook SessionEnd I1
 Stop-App; Use-Normal                                    # private instance gone; the login instance is still running
 Check 'login instance still running, untouched' ((Get-Process leonard -ErrorAction SilentlyContinue).Count -eq 1)
+
+if ($Audio) {
+  "== audio: the ghosts follow the right channel (plays two short test tones)"
+  $td = Join-Path $env:TEMP 'leonard_tones'; New-Item -ItemType Directory -Force $td | Out-Null
+  python -c "import wave,struct,math,sys
+for name,side in (('left',0),('right',1)):
+    w=wave.open(sys.argv[1]+'/tone_'+name+'.wav','wb'); w.setnchannels(2); w.setsampwidth(2); w.setframerate(44100)
+    w.writeframes(b''.join(struct.pack('<hh', *( (int(0.35*32767*math.sin(2*math.pi*440*i/44100)),0) if side==0 else (0,int(0.35*32767*math.sin(2*math.pi*440*i/44100))) )) for i in range(int(44100*1.6)))); w.close()" $td
+  $env:LEONARD_DIR = $testDir
+  function Meter { Start-Process $exe -ArgumentList '--meter', '1' -Wait; $m = Get-Content (Join-Path $testDir 'meter.txt'); [ordered]@{ L = [double]($m -replace '.*meanL=([\d.]+).*', '$1'); R = [double]($m -replace '.*meanR=([\d.]+).*', '$1'); ok = $m -match 'device=ok' } }
+  $base = Meter
+  Check 'an audio output device is found' $base.ok
+  if ($base.L -gt 0.45 -or $base.R -gt 0.45) {
+    "[SKIP] left / right tone checks  (audio is already playing loudly, L {0:N2} R {1:N2}: a test tone cannot stand out; the ghosts are alive though)" -f $base.L, $base.R
+  } else {
+    (New-Object System.Media.SoundPlayer (Join-Path $td 'tone_left.wav')).Play(); Start-Sleep -Milliseconds 200; $l = Meter; Start-Sleep 1
+    (New-Object System.Media.SoundPlayer (Join-Path $td 'tone_right.wav')).Play(); Start-Sleep -Milliseconds 200; $r = Meter; Start-Sleep 1
+    Check 'left tone raises the LEFT level (cyan)'   (($l.L - $base.L) -gt 0.15 -and ($l.L - $base.L) -gt 2 * ($l.R - $base.R)) ("L {0:N2} -> {1:N2}, R {2:N2} -> {3:N2}" -f $base.L, $l.L, $base.R, $l.R)
+    Check 'right tone raises the RIGHT level (#dc4583)' (($r.R - $base.R) -gt 0.15 -and ($r.R - $base.R) -gt 2 * ($r.L - $base.L)) ("L {0:N2} -> {1:N2}, R {2:N2} -> {3:N2}" -f $base.L, $r.L, $base.R, $r.R)
+  }
+  $env:LEONARD_DIR = $null
+}
 
 if ($Real) {
   "== real Claude Code sessions (hooks from settings.json)"

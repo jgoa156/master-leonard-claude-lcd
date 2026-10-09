@@ -1,4 +1,4 @@
-# install.ps1 - set Master Leonard up for the current user (no admin needed). Safe to run again.
+﻿# install.ps1 - set Master Leonard up for the current user (no admin needed). Safe to run again.
 #   .\install.ps1              install
 #   .\install.ps1 -Uninstall   remove the startup shortcut and the Claude hooks
 #
@@ -10,7 +10,7 @@ $exe  = Join-Path $PSScriptRoot 'bin\leonard.exe'
 $lnk  = Join-Path ([Environment]::GetFolderPath('Startup')) 'Master Leonard.lnk'
 $cfg  = Join-Path $env:USERPROFILE '.claude\settings.json'
 $cmd  = ($exe -replace '\\', '/') + ' --hook'          # forward slashes: Claude Code runs hooks through bash
-$events = 'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Notification','Stop','SubagentStop','PreCompact','SessionEnd'
+$events = 'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Notification','Stop','StopFailure','SubagentStop','PreCompact','SessionEnd'
 $withMatcher = 'PreToolUse', 'PostToolUse'
 $ours = 'leonard|phillip'                               # any earlier hook command of ours matches this
 
@@ -46,7 +46,7 @@ Write-Host ("hooks:    {0}  ({1})" -f $(if ($Uninstall) { 'removed' } else { "in
 if ($Uninstall) { if (Test-Path $lnk) { Remove-Item $lnk }; Write-Host 'startup:  shortcut removed' }
 else {
     $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
-    $s.TargetPath = $exe; $s.WorkingDirectory = Split-Path $exe; $s.WindowStyle = 7
+    $s.TargetPath = $exe; $s.Arguments = '--background'; $s.WorkingDirectory = Split-Path $exe; $s.WindowStyle = 7     # hidden at login; a double-click shows the window
     $s.Description = 'Master Leonard - Claude status avatar (background, no window)'; $s.Save()
     Write-Host "startup:  $lnk"
 }

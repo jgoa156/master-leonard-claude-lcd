@@ -1,13 +1,11 @@
-# build output (rebuilt by build.ps1)
+﻿# build output (rebuilt by build.ps1)
 bin/
 build/
 gen/
 __pycache__/
 *.pyc
 
-# third-party artwork and everything derived from it: NOT redistributable, supply your own
-assets/source/*
-!assets/source/README.md
+# the artwork: other artists' work, NOT redistributable. Supply your own (see assets/art/README.md)
 assets/art/*
 !assets/art/README.md
 docs/previews/
