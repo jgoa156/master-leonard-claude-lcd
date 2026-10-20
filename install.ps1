@@ -10,8 +10,8 @@ $exe  = Join-Path $PSScriptRoot 'bin\leonard.exe'
 $lnk  = Join-Path ([Environment]::GetFolderPath('Startup')) 'Master Leonard.lnk'
 $cfg  = Join-Path $env:USERPROFILE '.claude\settings.json'
 $cmd  = ($exe -replace '\\', '/') + ' --hook'          # forward slashes: Claude Code runs hooks through bash
-$events = 'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Notification','Stop','StopFailure','SubagentStop','PreCompact','SessionEnd'
-$withMatcher = 'PreToolUse', 'PostToolUse'
+$events = 'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','PostToolUseFailure','Notification','Stop','StopFailure','SubagentStop','PreCompact','SessionEnd'
+$withMatcher = 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'
 $ours = 'leonard|phillip'                               # any earlier hook command of ours matches this
 
 if (-not $Uninstall -and -not (Test-Path $exe)) { throw "bin\leonard.exe not found - run .\build.ps1 first" }

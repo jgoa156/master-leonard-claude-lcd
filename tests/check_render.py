@@ -7,7 +7,7 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXE = os.path.join(ROOT, "bin", "leonard.exe")
 tmp = tempfile.mkdtemp()
-MOODS = {"idle": (255, 255, 255), "thinking": (51, 214, 255), "speaking": (255, 236, 150),
+MOODS = {"idle": (255, 255, 255), "thinking": (255, 40, 32), "speaking": (255, 236, 150),
          "happy": (93, 255, 122), "alert": (255, 30, 30), "sleepy": (150, 100, 20), "dead": (210, 20, 20)}
 bad = 0
 
@@ -80,7 +80,8 @@ for mood in ("idle", "sleepy"):
     e = edge(gframe(mood, 0, 100)); check(f"{mood:9s} (standby): no border glow", e.max() < 3, f"edge RGB {e.round().astype(int).tolist()}")
 check("border is a thin soft band", g1[H // 2, 0].max() > 15 and g1[H // 2, int(48 * k8 / 1.6)].max() < 0.6 * g1[H // 2, 0].max() and g1[H // 2, int(90 * k8)].max() < 3, f"{g1[H//2,0].max():.0f} at the edge, {g1[H//2,int(48*k8/1.6)].max():.0f} / {g1[H//2,int(90*k8)].max():.0f} further in")
 hit = gframe("thinking", 0, 100, 1.0)
-check("border flares on a hit (much brighter than at rest)", hit[H // 2, 0].max() > 2 * g1[H // 2, 0].max(), f"{g1[H//2,0].max():.0f} at rest -> {hit[H//2,0].max():.0f} on a hit")
+check("border flares on a hit (much brighter than at rest)", hit[0, W // 2].max() > 2 * g1[0, W // 2].max(),   # top edge: the hit's sideways RGB split cannot move it
+      f"{g1[0,W//2].max():.0f} at rest -> {hit[0,W//2].max():.0f} on a hit")
 check("border is subtle (opacity low: edge under 45% brightness)", g1[H // 2, 0].max() < 0.45 * 255, f"{g1[H//2,0].max():.0f}")
 check("border reaches the corners", g1[1, 1].max() > 15 and g1[-2, -2].max() > 15 and g1[1, -2].max() > 15, f"corner {g1[1,1].max():.0f}")
 check("border pulses with the eye (thinking moves over time)", abs(float(edge(gframe("thinking", 0, 100)).max()) - float(edge(gframe("thinking", 0, 400)).max())) > 1.5)

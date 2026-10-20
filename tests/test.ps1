@@ -29,9 +29,9 @@ Check 'no stray files in the project root' (@(Get-ChildItem $root -File | Where-
 "== installation"
 $cfg = Get-Content (Join-Path $env:USERPROFILE '.claude\settings.json') -Raw | ConvertFrom-Json
 $expected = ($exe -replace '\\', '/') + ' --hook'
-$events = 'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Notification','Stop','StopFailure','SubagentStop','PreCompact','SessionEnd'
+$events = 'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','PostToolUseFailure','Notification','Stop','StopFailure','SubagentStop','PreCompact','SessionEnd'
 $wrong = @($events | Where-Object { -not ($cfg.hooks.$_ | ForEach-Object { $_.hooks } | Where-Object { $_.command -eq $expected }) })
-Check 'settings.json has all 10 hooks -> leonard.exe --hook' ($wrong.Count -eq 0) ($wrong -join ',')
+Check 'settings.json has all 11 hooks -> leonard.exe --hook' ($wrong.Count -eq 0) ($wrong -join ',')
 Check 'no leftover hooks from the old names' (-not ((Get-Content (Join-Path $env:USERPROFILE '.claude\settings.json') -Raw) -match 'phillip|leonard_hook'))
 Check 'startup shortcut exists' (Test-Path $lnk)
 if (Test-Path $lnk) { Check 'startup shortcut targets bin\leonard.exe' (((New-Object -ComObject WScript.Shell).CreateShortcut($lnk)).TargetPath -eq $exe) }
@@ -237,9 +237,18 @@ Stop-App; Start-Process $exe -ArgumentList '--background', '--stale', '3'; Start
 Send-Hook SessionStart I1; Send-Hook UserPromptSubmit I1; Send-Hook PreToolUse I1
 Check 'working session shows thinking' ((Status) -like 'thinking *')
 Start-Sleep 4
-Check 'silent thinking session settles to idle' ((Status) -like 'idle *')
+Check 'a long-running tool stays thinking past the stale time' ((Status) -like 'thinking *')
+Send-Hook PreToolUse I1; Send-Hook PostToolUse I1                 # parallel tools: one ends, the other still runs
+Start-Sleep 4
+Check 'one of two parallel tools ended: still thinking' ((Status) -like 'thinking *')
+Send-Hook PostToolUseFailure I1                                     # the last tool ends (failed)
+Start-Sleep 4
+Check 'no tool running + silent: settles to idle' ((Status) -like 'idle *')
 Send-Hook PreToolUse I1
 Check 'it wakes up on the next event' ((Status) -like 'thinking *')
+Send-Hook Stop I1; Send-Hook UserPromptSubmit I1                  # a tool cut off by Esc: the next run starts clean
+Start-Sleep 4
+Check 'a new prompt clears tools left open by the last run' ((Status) -like 'idle *')
 Send-Hook SessionEnd I1
 Stop-App; Use-Normal                                    # private instance gone; the login instance is still running
 Check 'login instance still running, untouched' ((Get-Process leonard -ErrorAction SilentlyContinue).Count -eq 1)

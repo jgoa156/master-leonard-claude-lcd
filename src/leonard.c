@@ -16,7 +16,7 @@
  *   leonard.exe --meter N              diagnostic: record the raw left / right output level for N s -> meter.txt
  *   leonard.exe --no-audio             no audio ghosts (the cyan / #dc4583 copies that glow with the left / right channel)
  *   leonard.exe --no-follow            the head does not follow the mouse (it glances around by mood instead)
- *   leonard.exe --stale N              seconds of silence before "thinking" counts as interrupted (120)
+ *   leonard.exe --stale N              seconds of silence (no tool running) before "thinking" counts as interrupted (300)
  *   leonard.exe --dump mood dir out.ppm [ms]    one frame to a PPM file (tests / mockups)
  *
  * Runtime files live in %LOCALAPPDATA%\MasterLeonard (status.txt, events.log), not next to the exe.
@@ -81,8 +81,9 @@ static int hook_main(void) {
         !strcmp(ev, "StopFailure")      ? failure_mood(js) :   /* API error: out of credits -> dead, other -> alert */
         !strcmp(ev, "Notification")     ? "alert"    :   /* permission prompt / waiting for you */
         !strcmp(ev, "Stop")             ? "done"     :   /* reply finished: the app picks happy (task) or speaking (chat) */
-        !strcmp(ev, "PreToolUse")       ? "work"     :   /* tools running: marks this run as a task */
-        !strcmp(ev, "PostToolUse")      ? "work"     :
+        !strcmp(ev, "PreToolUse")       ? "tool"     :   /* a tool starts: marks this run as a task, keeps it busy until it ends */
+        !strcmp(ev, "PostToolUse")      ? "work"     :   /* a tool ended */
+        !strcmp(ev, "PostToolUseFailure") ? "work"   :
         !strcmp(ev, "UserPromptSubmit") ? "prompt"   :   /* a new run begins */
         !strcmp(ev, "SessionStart")     ? "idle"     :
         !strcmp(ev, "SessionEnd")       ? "end"      :
@@ -407,9 +408,9 @@ static void compose(const Av *a, long t) {
 
 /* ------------------------------------------------------------ Claude sessions (leonard_hook.exe -> UDP) */
 #define MAXS 64
-typedef struct { char id[256]; int mood, worked; long t; } Sess;
+typedef struct { char id[256]; int mood, worked, tools; long t; } Sess;   /* tools: started (PreToolUse) and not yet ended */
 static Sess SS[MAXS]; static int NS, QUIT, SHOW_REQ; static SOCKET SK = INVALID_SOCKET;
-static long STALE_MS = 120000;                              /* "thinking" with no event for this long -> assume interrupted/closed -> idle */
+static long STALE_MS = 300000;                              /* "thinking", no tool running, no event for this long -> assume interrupted/closed -> idle */
 
 static int net_init(void) {                                   /* 0 = another instance already owns the port */
     WSADATA w; if (WSAStartup(MAKEWORD(2, 2), &w)) return 0;
@@ -437,12 +438,14 @@ static void net_poll(long t) {
         int i = 0; while (i < NS && strcmp(SS[i].id, buf)) i++;
         if (!strcmp(sp, "end")) { if (i < NS) SS[i] = SS[--NS]; continue; }
         int m = -1; for (int k = 0; k < NSTATE; k++) if (!strcmp(sp, SNAME[k])) m = k;
-        int work = !strcmp(sp, "work"), done = !strcmp(sp, "done"), prompt = !strcmp(sp, "prompt");
+        int tool = !strcmp(sp, "tool"), work = tool || !strcmp(sp, "work"), done = !strcmp(sp, "done"), prompt = !strcmp(sp, "prompt");
         if (work || prompt) m = THINKING;
         if (m < 0 && !done) continue;
-        if (i == NS) { if (NS == MAXS) continue; NS++; snprintf(SS[i].id, sizeof SS[i].id, "%s", buf); SS[i].worked = 0; }
+        if (i == NS) { if (NS == MAXS) continue; NS++; snprintf(SS[i].id, sizeof SS[i].id, "%s", buf); SS[i].worked = SS[i].tools = 0; }
+        if (prompt || done) SS[i].tools = 0;                   /* a run starts / ends: no tool is still running */
         if (prompt) SS[i].worked = 0;                          /* new run */
         if (work) SS[i].worked = 1;                            /* tools ran: this run is a task */
+        if (tool) SS[i].tools++; else if (work && SS[i].tools > 0) SS[i].tools--;
         if (done) m = SS[i].worked ? HAPPY : SPEAKING;         /* finished a task vs answered a chat */
         SS[i].mood = m; SS[i].t = t;
     }
@@ -451,9 +454,9 @@ static void net_poll(long t) {
 static int sessions_mood(long t) {
     int best = -1;
     for (int i = 0; i < NS; i++) {
-        if (t - SS[i].t > (SS[i].mood == DEAD ? 6 * 3600000L : 30 * 60000L)) { SS[i--] = SS[--NS]; continue; }   /* gone silent (dead: 6 h) */
+        if (t - SS[i].t > (SS[i].mood == DEAD ? 6 * 3600000L : SS[i].tools ? 2 * 3600000L : 30 * 60000L)) { SS[i--] = SS[--NS]; continue; }   /* gone silent (dead / a tool running: longer) */
         if ((SS[i].mood == SPEAKING || SS[i].mood == HAPPY) && t - SS[i].t > 6000) SS[i].mood = IDLE;   /* shown, back to idle */
-        if (SS[i].mood == THINKING && t - SS[i].t > STALE_MS) { SS[i].mood = IDLE; SS[i].worked = 0; }   /* interrupted: no Stop hook exists for Esc */
+        if (SS[i].mood == THINKING && !SS[i].tools && t - SS[i].t > STALE_MS) { SS[i].mood = IDLE; SS[i].worked = 0; }   /* interrupted: no Stop hook exists for Esc; a running tool (a build, a subagent) is silent but busy */
         if (best < 0 || PRIORITY[SS[i].mood] > PRIORITY[best]) best = SS[i].mood;
     }
     return best < 0 ? SLEEPY : best;

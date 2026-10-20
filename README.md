@@ -17,14 +17,15 @@ sessions are doing, and its head follows your mouse. One exe does everything: `b
 | **alert** | the whole goat blinks white <-> red every 0.5 s | a session needs you (permission / input), or another API error |
 | **happy** | green eyes | a run that used tools finished (a task) |
 | **speaking** | pale yellow flicker | a plain chat answer finished |
-| **thinking** | cyan eyes | a session is working |
+| **thinking** | red eyes, pulsing | a session is working |
 | **idle** | white eyes | sessions open, quiet |
 | **sleepy** | dim amber line | no Claude session open |
 
 With several sessions, the highest in this order is shown (the table is `PRIORITY` in `src\avatar.h`):
 **dead > alert > happy > speaking > thinking > idle > sleepy**. A finished task or answer shows over sessions that are
-still working; happy / speaking last about 6 s, then that session counts as idle. A "thinking" session that goes
-silent for 2 minutes (Esc, closed window, crash: Claude Code has no hook for those) settles to idle. Dead clears when
+still working; happy / speaking last about 6 s, then that session counts as idle. While a tool is running (a build,
+a long command, a subagent) the session stays thinking however long it takes. With no tool running, a "thinking"
+session that goes silent for 5 minutes (Esc, closed window, crash: Claude Code has no hook for those) settles to idle. Dead clears when
 that session sends its next event, i.e. when credits are back.
 
 **Audio ghosts.** Behind the white skull, a **cyan** copy glows with the **left** audio channel and a **#dc4583** copy with the **right** one: louder = brighter and further out, silence = no ghosts. The level is Windows' own output meter for the default speakers / headphones (what's playing; no microphone, no recording). `--no-audio` turns it off; `leonard.exe --meter 3` records the raw left / right levels for 3 s into `meter.txt`. On every beat (a sudden jump in level)
@@ -84,7 +85,7 @@ sessions -> picks the mood -> draws the frame (the panel size, 800x480 by defaul
 panel is not written yet**: it goes at the marked spot in `main` (`src\leonard.c`) once the hardware is here
 (Turing / TURZX serial protocol).
 
-The hooks: `SessionStart UserPromptSubmit PreToolUse PostToolUse Notification Stop StopFailure SubagentStop
+The hooks: `SessionStart UserPromptSubmit PreToolUse PostToolUse PostToolUseFailure Notification Stop StopFailure SubagentStop
 PreCompact SessionEnd`. `StopFailure` fires when a turn ends on an API error: `billing_error`, `rate_limit` and
 `account_on_hold` make the goat dead; any other error is an alert.
 
