@@ -104,6 +104,7 @@ static int hook_main(void) {
 typedef struct { const unsigned char *img; const float (*eye)[4]; } PPose;
 static const PPose POSES[3] = {{PAN_LEFT, PEYE_LEFT}, {PAN_FRONT, PEYE_FRONT}, {PAN_RIGHT, PEYE_RIGHT}};
 static unsigned char FB[PANEL_H][PANEL_W][3];               /* RGB frame */
+#include "lcd.h"                                             /* the USB panel (TURZX / Turing, WinUSB) */
 
 static float clampf(float v, float a, float b) { return v < a ? a : v > b ? b : v; }
 
@@ -116,12 +117,12 @@ static void tblit(const unsigned char *g, int gw, int gh, int x0, int y0, const 
         for (int q = 0; q < 3; q++) { int c = (int)(v * ink[q]); if (c > FB[Y][X][q]) FB[Y][X][q] = (unsigned char)c; }
     }
 }
-static void tally(int n, const float ink[3]) {
+static void tally(int n, int cx, const float ink[3]) {
     if (n <= 0) return;
     if (n > 40) n = 40;
     int groups = (n + 4) / 5, cells = 0;
     for (int g = 0; g < groups; g++) cells += n - g * 5 >= 5 ? 4 : n - g * 5;
-    int x = PANEL_W / 2 - (cells + groups - 1) * TALLY_CW / 2;          /* groups are separated by one blank cell */
+    int x = cx - (cells + groups - 1) * TALLY_CW / 2;          /* groups are separated by one blank cell */
     for (int g = 0; g < groups; g++) {
         int k = n - g * 5 >= 5 ? 4 : n - g * 5;
         for (int i = 0; i < k; i++) tblit(TALLY_BAR, TALLY_CW, TALLY_H, x + i * TALLY_CW, TALLY_Y, ink);
@@ -164,16 +165,21 @@ static const float GHOST_MAG = 1.5f;                             /* the #dc4583 
 static const float GHOST_CYAN = 0.70f;                           /* the cyan copy shines a bit less than the #dc4583 one */
 /* glitch: on each beat the ghosts jump to a random offset and a few horizontal slices of them shear sideways,
  * for ~0.1-0.2 s, then they snap back. Only the ghosts move; the white skull stays put. */
-static float GLX[2], GLY[2]; static int GBN, GB[4][3]; static long GLITCH_UNTIL, GLITCH_COOL;
+static float GLX[2], GLY[2]; static int GBN, GB[8][3]; static long GLITCH_UNTIL, GLITCH_COOL;
+static float GLV;                                             /* how loud the beat was: glitch intensity 0..1 */
 static void glitch_kick(long t) {
-    float sc = PANEL_W / 800.0f;
-    for (int i = 0; i < 2; i++) { GLX[i] = (float)(rand() % 33 - 16) * sc; GLY[i] = (float)(rand() % 9 - 4) * sc; }
-    GBN = 1 + rand() % 3;
+    float sc = PANEL_W / 800.0f, lv = fmaxf(fmaxf(LEV[0], LEV[1]), fmaxf(RAW[0], RAW[1]));
+    if (lv > 1) lv = 1;
+    GLV = lv;
+    for (int i = 0; i < 2; i++) { GLX[i] = (float)(rand() % 33 - 16) * sc * (1 + lv); GLY[i] = (float)(rand() % 9 - 4) * sc * (1 + lv); }
+    GBN = 2 + rand() % (2 + (int)(lv * 4));                  /* louder = more torn slices */
+    if (GBN > 8) GBN = 8;
     for (int b = 0; b < GBN; b++) {
-        int h = (int)((6 + rand() % 26) * sc); if (h < 2) h = 2;
-        GB[b][0] = rand() % (PANEL_H - h); GB[b][1] = GB[b][0] + h; GB[b][2] = (int)((rand() % 2 ? 1 : -1) * (8 + rand() % 22) * sc);
+        int h = (int)((4 + rand() % (14 + (int)(lv * 30))) * sc); if (h < 2) h = 2;
+        GB[b][0] = rand() % (PANEL_H - h); GB[b][1] = GB[b][0] + h;
+        GB[b][2] = (int)((rand() % 2 ? 1 : -1) * (8 + rand() % 22) * sc * (1 + 2.5f * lv));
     }
-    GLITCH_UNTIL = t + 90 + rand() % 90;
+    GLITCH_UNTIL = t + 90 + rand() % 90 + (long)(lv * 120);
 }
 static const float GHOST_R[3] = {220 / 255.0f, 69 / 255.0f, 131 / 255.0f};   /* right-channel ghost: #dc4583 */
 static unsigned char GH[3][PANEL_H][PANEL_W];                 /* per pose: the skull's glow (sharp lines + soft halo) */
@@ -245,10 +251,32 @@ static void ghost_init(void) {
     }
 }
 
+static int FB_GLOW = 1; static float GLOW_COL[3], GLOW_K;       /* edge glow: in the frame (panel) or painted by the window */
+static int imin(int a, int b) { return a < b ? a : b; }
+
 /* blend colour c at strength k (0..1) over the frame, keeping the brighter */
 static void lit(int x, int y, const float c[3], float k) {
     if (x < 0 || y < 0 || x >= PANEL_W || y >= PANEL_H || k <= 0) return;
     for (int q = 0; q < 3; q++) { int v = (int)(c[q] * clampf(k, 0, 1)); if (v > FB[y][x][q]) FB[y][x][q] = (unsigned char)v; }
+}
+
+/* the neon X (dead eyes and the close button): distance from (dx,dy) to the nearer of its two strokes,
+ * each a segment from corner to corner of a hx x hy half-box */
+static float xdist(float dx, float dy, float hx, float hy) {
+    float best = 1e9f;
+    for (int k = 0; k < 2; k++) {
+        float ux = hx, uy = k ? -hy : hy, L2 = ux * ux + uy * uy;
+        float t = clampf((dx * ux + dy * uy) / L2, -1, 1), px = dx - t * ux, py = dy - t * uy, d = sqrtf(px * px + py * py);
+        if (d < best) best = d;
+    }
+    return best;
+}
+/* paint a neon X into an RGB buffer: a hot core of width w, then a soft glow of the colour fading over 5 widths */
+static void neon_x(float d, float w, const float col[3], float out[3]) {
+    float core[3]; for (int q = 0; q < 3; q++) core[q] = col[q] + (255 - col[q]) * 0.35f;
+    if (d < w) { for (int q = 0; q < 3; q++) out[q] = core[q]; return; }
+    float k = d < w * 6 ? powf(1 - (d - w) / (w * 5), 1.6f) * 0.9f : 0;
+    for (int q = 0; q < 3; q++) out[q] = col[q] * k;
 }
 
 /* mood-shaped eye core, centred on (ex,ey), sized to the socket */
@@ -306,14 +334,54 @@ static void compose(const Av *a, long t) {
     for (int s = 0; s < 2; s++) {
         float ex = P->eye[s][0], ey = P->eye[s][1], rx = P->eye[s][2], ry = P->eye[s][3];
         int sx = ex < PANEL_W / 2.0f ? -1 : 1;
-        for (int y = (int)(ey - ry * 1.4f) - 1; y <= (int)(ey + ry * 1.4f) + 1; y++)
-            for (int x = (int)(ex - rx * 1.4f) - 1; x <= (int)(ex + rx * 1.4f) + 1; x++) {
+        const float RB = 2.2f;                                /* reach of the eye's own halo */
+        for (int y = (int)(ey - ry * RB) - 1; y <= (int)(ey + ry * RB) + 1; y++)
+            for (int x = (int)(ex - rx * RB) - 1; x <= (int)(ex + rx * RB) + 1; x++) {
+                if (x < 0 || y < 0 || x >= PANEL_W || y >= PANEL_H) continue;
                 float dx = x + 0.5f - ex, dy = y + 0.5f - ey, d = sqrtf(dx * dx / (rx * rx) + dy * dy / (ry * ry));
-                if (d < 1.4f) lit(x, y, glow, powf(1 - d / 1.4f, 1.3f) * m * 0.85f);
+                if (d < 2.2f) lit(x, y, glow, powf(1 - d / 2.2f, 1.1f) * m * 1.0f);   /* a wider, stronger halo */
+                if (a->state == DEAD) {                       /* dead: a big neon X (wider strokes, same thickness) */
+                    float o[3]; neon_x(xdist(dx, dy, rx * 1.6f, ry * 1.0f), fmaxf(1.1f, rx * 0.16f), glow, o);
+                    for (int q = 0; q < 3; q++) if (o[q] > FB[y][x][q]) FB[y][x][q] = (unsigned char)clampf(o[q], 0, 255);
+                    continue;
+                }
                 if (core(a->state, a->blink, dx, dy, rx, ry, sx)) lit(x, y, hot, 0.55f + 0.45f * m);
             }
     }
-    tally(a->sessions, ink);                                  /* one slash per open session, centred on top */
+    /* neon border: the edges of the black background glow in the eye colour, very soft, pulsing with the eye.
+     * The window paints it itself over its whole client area (corners included); the panel gets it from the frame. */
+    for (int q = 0; q < 3; q++) GLOW_COL[q] = glow[q];
+    GLOW_K = (a->state == IDLE || a->state == SLEEPY) ? 0 : m * 0.5f;   /* standby (idle / sleepy): no border */
+    if (FB_GLOW) {
+        float bw = 0.2f * (float)(PANEL_W < PANEL_H ? PANEL_W : PANEL_H);
+        for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) {
+            float e = (float)imin(imin(x, PANEL_W - 1 - x), imin(y, PANEL_H - 1 - y)) + 0.5f;
+            if (e < bw) lit(x, y, GLOW_COL, powf(1 - e / bw, 3.0f) * GLOW_K);
+        }
+    }
+    tally(a->sessions, PAN_TIP[pi], ink);                                  /* one slash per open session, centred on top */
+
+    /* glitch over the whole picture: RGB split that grows with the level, and on a beat torn slices shoved sideways */
+    {   float lv = fmaxf(L, Rt), sc2 = PANEL_W / 800.0f;
+        int ca = (int)(lv * lv * 7 * sc2) + (gl ? (int)((3 + 10 * GLV) * sc2) : 0);
+        static int off = -1; if (off < 0) off = getenv("LEONARD_NOGLITCH") != NULL;   /* tests: clean frames */
+        if (!off && (ca > 0 || gl)) {
+            static unsigned char row[PANEL_W][3];
+            for (int y = 0; y < PANEL_H; y++) {
+                int sh = 0;
+                if (gl) for (int b = 0; b < GBN; b++) if (y >= GB[b][0] && y < GB[b][1]) sh = GB[b][2];
+                int c = ca + (sh ? abs(sh) / 4 : 0);
+                if (!sh && !c) continue;
+                memcpy(row, FB[y], sizeof row);
+                for (int x = 0; x < PANEL_W; x++) {
+                    int xr = x - sh + c, xg = x - sh, xb = x - sh - c;
+                    FB[y][x][0] = (xr >= 0 && xr < PANEL_W) ? row[xr][0] : 0;
+                    FB[y][x][1] = (xg >= 0 && xg < PANEL_W) ? row[xg][1] : 0;
+                    FB[y][x][2] = (xb >= 0 && xb < PANEL_W) ? row[xb][2] : 0;
+                }
+            }
+        }
+    }
 }
 
 /* ------------------------------------------------------------ Claude sessions (leonard_hook.exe -> UDP) */
@@ -408,16 +476,88 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         int dx = (cw - dw) / 2, dy = (ch - dh) / 2;
         PatBlt(dc, 0, 0, cw, ch, BLACKNESS);
         StretchDIBits(dc, dx, dy, dw, dh, 0, 0, PANEL_W, PANEL_H, PIX, &BI, DIB_RGB_COLORS, SRCCOPY);
-        if (CLOSE_HOVER) {                                   /* the close button: an ASCII X, only there (and red) while hovered */
-            HFONT f = CreateFontA(-34, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN, "Consolas");
-            HFONT old = (HFONT)SelectObject(dc, f);
-            SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(220, 69, 131));          /* a plain ASCII x in #dc4583 */
-            TextOutA(dc, cw - 28, 2, "x", 1);
-            SelectObject(dc, old); DeleteObject(f);
+        if (!FB_GLOW && cw > 8 && ch > 8) {                  /* the neon border, over the whole client area, corners included */
+            unsigned int *g = (unsigned int *)malloc((size_t)cw * ch * 4);
+            if (g) {
+                float bw = 0.2f * (float)(cw < ch ? cw : ch);
+                for (int y = 0; y < ch; y++) for (int x = 0; x < cw; x++) {
+                    float e = (float)imin(imin(x, cw - 1 - x), imin(y, ch - 1 - y)) + 0.5f, k = e < bw ? powf(1 - e / bw, 3.0f) * GLOW_K : 0;
+                    g[(size_t)y * cw + x] = ((unsigned)(GLOW_COL[0] * k) << 16) | ((unsigned)(GLOW_COL[1] * k) << 8) | (unsigned)(GLOW_COL[2] * k);
+                }
+                BITMAPINFO gi = {{sizeof(BITMAPINFOHEADER), cw, -ch, 1, 32, BI_RGB}};
+                StretchDIBits(dc, 0, 0, cw, ch, 0, 0, cw, ch, g, &gi, DIB_RGB_COLORS, SRCPAINT);
+                free(g);
+            }
+        }
+        if (CLOSE_HOVER) {                                   /* the close button: the dead eye's neon X in #dc4583, only while hovered */
+            enum { S = 44 }; static unsigned int px[S * S]; static const float col[3] = {220, 69, 131};
+            for (int y = 0; y < S; y++) for (int x = 0; x < S; x++) {
+                float o[3]; neon_x(xdist(x + 0.5f - S / 2.0f, y + 0.5f - S / 2.0f, 9, 9), 1.6f, col, o);
+                px[y * S + x] = ((unsigned)o[0] << 16) | ((unsigned)o[1] << 8) | (unsigned)o[2];
+            }
+            BITMAPINFO bi = {{sizeof(BITMAPINFOHEADER), S, -S, 1, 32, BI_RGB}};
+            StretchDIBits(dc, cw - S - 2, 0, S, S, 0, 0, S, S, px, &bi, DIB_RGB_COLORS, SRCPAINT);   /* added over the picture */
         }
         EndPaint(h, &ps); return 0; }
     }
     return DefWindowProc(h, msg, w, l);
+}
+
+/* ------------------------------------------------------------ tray icon (notification area): stop / resume / preview / exit */
+#include <shellapi.h>
+enum { TRAY_MSG = WM_APP + 1, ID_STOP = 101, ID_RESUME, ID_PREVIEW, ID_FLIP, ID_EXIT };
+static NOTIFYICONDATAA NID; static UINT TASKBAR_CREATED; static int TRAY_CMD;
+static HICON tray_icon(void) {                                /* the front skull, shrunk to 32 x 32 */
+    static unsigned px[32 * 32]; unsigned char mask[32 * 32 / 8]; memset(mask, 0, sizeof mask);
+    float s = (float)PANEL_W / 32; int oy = (PANEL_H - (int)(32 * s)) / 2;
+    for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) {
+        int m = 0;
+        for (int yy = 0; yy < (int)s; yy++) for (int xx = 0; xx < (int)s; xx++) {
+            int Y = oy + (int)(y * s) + yy, X = (int)(x * s) + xx;
+            if (Y >= 0 && Y < PANEL_H && X < PANEL_W && PAN_FRONT[Y * PANEL_W + X] > m) m = PAN_FRONT[Y * PANEL_W + X];
+        }
+        unsigned v = m > 60 ? 255 : (unsigned)(m * 4 > 255 ? 255 : m * 4);
+        px[y * 32 + x] = 0xFF000000u | v << 16 | v << 8 | v;
+    }
+    HBITMAP col = CreateBitmap(32, 32, 1, 32, px), msk = CreateBitmap(32, 32, 1, 1, mask);
+    ICONINFO ii = {TRUE, 0, 0, msk, col}; HICON ic = CreateIconIndirect(&ii);
+    DeleteObject(col); DeleteObject(msk);
+    return ic;
+}
+static LRESULT CALLBACK tray_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+    if (msg == TASKBAR_CREATED) { Shell_NotifyIconA(NIM_ADD, &NID); return 0; }      /* Explorer restarted */
+    if (msg == TRAY_MSG) {
+        if (LOWORD(l) == WM_LBUTTONDBLCLK) TRAY_CMD = ID_PREVIEW;
+        if (LOWORD(l) == WM_RBUTTONUP || LOWORD(l) == WM_CONTEXTMENU) {
+            HMENU m = CreatePopupMenu(); char st[96];
+            snprintf(st, sizeof st, "Panel: %s", LCD_STOP ? "stopped" : LCD_ON ? LCD_NAME : "not found (dormant)");
+            AppendMenuA(m, MF_STRING | MF_GRAYED, 0, st);
+            AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+            AppendMenuA(m, MF_STRING | (LCD_STOP ? MF_GRAYED : 0), ID_STOP, "Stop (blank the screen)");
+            AppendMenuA(m, MF_STRING | (LCD_STOP ? 0 : MF_GRAYED), ID_RESUME, "Resume");
+            AppendMenuA(m, MF_STRING, ID_PREVIEW, "Show preview window");
+            AppendMenuA(m, MF_STRING, ID_FLIP, "Flip screen (turn 180 degrees)");
+            AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+            AppendMenuA(m, MF_STRING, ID_EXIT, "Exit");
+            POINT p; GetCursorPos(&p); SetForegroundWindow(h);
+            int c = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, 0, h, NULL);
+            DestroyMenu(m); if (c) TRAY_CMD = c;
+        }
+        return 0;
+    }
+    return DefWindowProc(h, msg, w, l);
+}
+static void tray_init(void) {
+    WNDCLASSA wc = {0}; wc.lpfnWndProc = tray_proc; wc.hInstance = GetModuleHandle(NULL); wc.lpszClassName = "leonard_tray";
+    RegisterClassA(&wc);
+    HWND h = CreateWindowA("leonard_tray", "leonard tray", 0, 0, 0, 0, 0, NULL, NULL, wc.hInstance, NULL);
+    TASKBAR_CREATED = RegisterWindowMessageA("TaskbarCreated");
+    NID.cbSize = sizeof NID; NID.hWnd = h; NID.uID = 1; NID.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    NID.uCallbackMessage = TRAY_MSG; NID.hIcon = tray_icon(); snprintf(NID.szTip, sizeof NID.szTip, "Master Leonard");
+    Shell_NotifyIconA(NIM_ADD, &NID);
+}
+static void tray_tip(const char *t) {
+    if (strcmp(NID.szTip, t)) { snprintf(NID.szTip, sizeof NID.szTip, "%s", t); Shell_NotifyIconA(NIM_MODIFY, &NID); }
 }
 
 int main(int argc, char **argv) {
@@ -435,6 +575,7 @@ int main(int argc, char **argv) {
     Av a = {0}; a.t0 = (long)GetTickCount64();
 
     if (dump) {                                           /* --dump state dir out.ppm [ms] */
+        if (getenv("LEONARD_NOGLOW")) FB_GLOW = 0;          /* tests: a frame without the edge glow */
         a.state = st; a.dir = argc > ai + 1 ? atoi(argv[ai + 1]) : 0;
         thick_init(); ghost_init();
         if (argc > ai + 5) { LEV[0] = (float)atof(argv[ai + 4]); LEV[1] = (float)atof(argv[ai + 5]); }   /* audio levels to show */
@@ -446,7 +587,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    int preview = 1, follow = 1, cur_dir = 0, audio = 1;          /* plain "leonard.exe" (a double-click) shows the window */
+    int preview = 0, follow = 1, cur_dir = 0, audio = 1, lcd = 1;          /* plain "leonard.exe": tray icon + the USB panel, no window */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--meter") && i + 1 < argc) {      /* diagnostic: record the raw L/R output meter for N s */
             long until = (long)GetTickCount64() + atol(argv[i + 1]) * 1000L; double sl = 0, sr = 0; float ml = 0, mr = 0; int k = 0;
@@ -462,6 +603,8 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (!strcmp(argv[i], "--no-audio")) audio = 0;
+        if (!strcmp(argv[i], "--no-lcd")) lcd = 0;
+        if (!strcmp(argv[i], "--lcd-flip")) LCD_FLIP = !LCD_FLIP;
         if (!strcmp(argv[i], "--no-follow")) follow = 0;
         if (!strcmp(argv[i], "--preview")) preview = 1;
         if (!strcmp(argv[i], "--background")) preview = 0;           /* hidden: no window, no console (the startup shortcut) */
@@ -482,9 +625,14 @@ int main(int argc, char **argv) {
     { FILE *f = rt_fopen("events.log", "w"); if (f) fclose(f); }   /* fresh event log per run */
     thick_init(); ghost_init();
     if (audio) CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    { FILE *f = rt_fopen("settings.txt", "r"); int v; if (f) { if (fscanf(f, "flip=%d", &v) == 1) LCD_FLIP = v; fclose(f); } }
+    if (getenv("LEONARD_NOLCD")) lcd = 0;                    /* tests: private copies never touch the panel */
+    tray_init();
+    if (lcd) lcd_start();                                     /* looks for the panel on every USB port, every 2 s */
+    int lcd_was = 0, want_win = preview;                       /* the window is only a stand-in while no panel is connected */
 
     HWND hw = NULL;
-    #define MAKE_WINDOW() do { \
+    #define MAKE_WINDOW() do { FB_GLOW = 0; \
         WNDCLASS wc = {0}; wc.lpfnWndProc = wndproc; wc.hInstance = GetModuleHandle(NULL); \
         wc.lpszClassName = "impure_panel"; wc.hCursor = LoadCursor(NULL, IDC_ARROW); \
         RegisterClass(&wc); \
@@ -511,8 +659,28 @@ int main(int argc, char **argv) {
         if (SHOW_REQ) {                                      /* "ctl show": a second launch asked for the window */
             SHOW_REQ = 0;
             if (!hw) MAKE_WINDOW(); else { ShowWindow(hw, SW_SHOW); ShowWindow(hw, SW_RESTORE); SetForegroundWindow(hw); }
+            want_win = 1;
         }
-        if (audio) audio_poll(t);
+        if (TRAY_CMD) {                                      /* the tray menu */
+            int c = TRAY_CMD; TRAY_CMD = 0;
+            if (c == ID_STOP) LCD_STOP = 1;
+            if (c == ID_RESUME) LCD_STOP = 0;
+            if (c == ID_EXIT) run = 0;
+            if (c == ID_PREVIEW) SHOW_REQ = 1;
+            if (c == ID_FLIP) {                              /* the panel was mounted the other way round: remembered */
+                LCD_FLIP = !LCD_FLIP;
+                FILE *f = rt_fopen("settings.txt", "w"); if (f) { fprintf(f, "flip=%d\n", LCD_FLIP); fclose(f); }
+            }
+        }
+        if (LCD_ON != lcd_was) {                             /* the panel came or went: render solely there while it is on */
+            lcd_was = LCD_ON;
+            if (hw) ShowWindow(hw, LCD_ON ? SW_HIDE : (want_win ? SW_SHOW : SW_HIDE));
+        }
+        FB_GLOW = LCD_ON || !(hw && IsWindowVisible(hw));     /* the panel needs the border glow in the frame itself */
+        int dorm = !LCD_ON && !(hw && IsWindowVisible(hw));  /* dormant: no panel, no window - only keep up with the hooks */
+        tray_tip(dorm ? (LCD_STOP ? "Master Leonard - stopped" : "Master Leonard - waiting for the panel")
+                      : LCD_ON ? "Master Leonard - on the panel" : "Master Leonard - preview");
+        if (audio && !dorm) audio_poll(t);
         if (t >= manual_until) { int m = sessions_mood(t); if (m != a.state) av_set(&a, m, t); }
         av_tick(&a, t);
         if (follow) {                                        /* the head looks at the screen third the cursor is in */
@@ -522,11 +690,12 @@ int main(int argc, char **argv) {
         if (a.state == DEAD) a.dir = 0;                      /* dead: centred, never follows */
         a.sessions = NS;
         if (hw && IsWindowVisible(hw)) { POINT cp; GetCursorPos(&cp); CLOSE_HOVER = in_close(hw, cp.x, cp.y); } else CLOSE_HOVER = 0;
-        compose(&a, t);                                      /* FB = the 480x320 frame: THE USB PANEL OUTPUT GOES HERE */
+        if (!dorm) { compose(&a, t); lcd_push(&FB[0][0][0]); }                              /* to the USB panel (when connected) */
         {   /* status file: shown mood + every session's own mood, rewritten whenever any of it changes */
             char sig[2048]; static const char *LOOK[3] = {"left", "center", "right"};
-            int n = snprintf(sig, sizeof sig, "%s %d audio=%c%c look=%s\n", SNAME[a.state], NS,
-                             LEV[0] > 0.15f ? 'L' : '-', LEV[1] > 0.15f ? 'R' : '-', LOOK[a.dir + 1]);   /* audio: coarse, so it is not rewritten every frame */
+            int n = snprintf(sig, sizeof sig, "%s %d audio=%c%c lcd=%s look=%s\n", SNAME[a.state], NS,
+                             LEV[0] > 0.15f ? 'L' : '-', LEV[1] > 0.15f ? 'R' : '-', LCD_ON ? LCD_NAME : LCD_ERR, LOOK[a.dir + 1]);
+            if (LCD_ON) n += snprintf(sig + n, sizeof sig - n, "lcd fps=%.1f\n", LCD_FPS10 / 10.0);   /* audio: coarse, so it is not rewritten every frame */
             for (int i = 0; i < NS && n < 1900; i++) n += snprintf(sig + n, sizeof sig - n, "  ...%.8s %s%s\n", SS[i].id + (strlen(SS[i].id) > 8 ? strlen(SS[i].id) - 8 : 0), SNAME[SS[i].mood], SS[i].worked ? " (worked)" : "");
             if (strcmp(sig, last_sig)) { strcpy(last_sig, sig); FILE *f = rt_fopen("status.txt", "w"); if (f) { fputs(sig, f); fclose(f); } }
         }        if (hw) {
@@ -536,7 +705,9 @@ int main(int argc, char **argv) {
             SetWindowText(hw, title);
             InvalidateRect(hw, NULL, FALSE);
         }
-        Sleep(33);
+        Sleep(dorm ? 100 : 33);                               /* dormant: a slow, cheap tick that still answers hooks quickly */
     }
+    if (LCD_ON) { LCD_STOP = 1; for (int k = 0; k < 40 && LCD_ON; k++) Sleep(100); }   /* exit: leave the panel dark */
+    Shell_NotifyIconA(NIM_DELETE, &NID);
     return 0;
 }

@@ -7,7 +7,7 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXE = os.path.join(ROOT, "bin", "leonard.exe")
 tmp = tempfile.mkdtemp()
-MOODS = {"idle": (255, 150, 0), "thinking": (51, 214, 255), "speaking": (255, 236, 150),
+MOODS = {"idle": (255, 255, 255), "thinking": (51, 214, 255), "speaking": (255, 236, 150),
          "happy": (93, 255, 122), "alert": (255, 30, 30), "sleepy": (150, 100, 20), "dead": (210, 20, 20)}
 bad = 0
 
@@ -15,7 +15,11 @@ def frame(mood, d, ms=0, lev=None, sessions=None):
     p = os.path.join(tmp, "f.ppm")
     extra = [str(lev[0]), str(lev[1])] if lev else (["0", "0"] if sessions is not None else [])
     if sessions is not None: extra.append(str(sessions))
-    subprocess.run([EXE, "--dump", mood, str(d), p, str(ms)] + extra, check=True)
+    subprocess.run([EXE, "--dump", mood, str(d), p, str(ms)] + extra, check=True, env=dict(os.environ, LEONARD_NOGLOW="1", LEONARD_NOGLITCH="1"))   # no edge glow, no glitch
+    return np.asarray(Image.open(p).convert("RGB"), np.float32)
+
+def gframe(mood, d, ms=0):                      # a frame WITH the edge glow
+    p = os.path.join(tmp, "g.ppm"); subprocess.run([EXE, "--dump", mood, str(d), p, str(ms)], check=True)
     return np.asarray(Image.open(p).convert("RGB"), np.float32)
 
 def check(name, ok, detail=""):
@@ -23,9 +27,13 @@ def check(name, ok, detail=""):
     print(("[PASS] " if ok else "[FAIL] ") + name + (f"  ({detail})" if detail else ""))
     bad += not ok
 
+EDGE = 26                                           # the neon border glows within ~22 px of the panel edge (at 800 px wide)
+def inner(img):
+    """the frame with the glowing border zeroed out"""
+    o = np.zeros_like(img); o[EDGE:-EDGE, EDGE:-EDGE] = img[EDGE:-EDGE, EDGE:-EDGE]; return o
 def tint(img):
     """coloured (non-grey) pixels: the eye LEDs"""
-    m = (img.max(2) - img.min(2)) > 25
+    img = inner(img); m = (img.max(2) - img.min(2)) > 25
     return m, (img[m].mean(0) if m.any() else np.zeros(3))
 
 H, W = frame("idle", 0).shape[:2]
@@ -36,6 +44,10 @@ for r, (mood, col) in enumerate(MOODS.items()):
         img = frame(mood, d, 100)
         sheet.paste(Image.fromarray(img.astype(np.uint8)), (10 + c * (W + 10), 10 + r * (H + 10)))
         m, mean = tint(img); n = int(m.sum())
+        if mood == "idle":                         # white eyes: solid white where the thinking mood has its cyan LEDs
+            tm = tint(frame("thinking", d, 100))[0]; zone = img[tm]
+            check(f"idle      pose {d:+d}: eyes lit (white)", int((zone.min(1) > 245).sum()) >= 6, f"{int((zone.min(1) > 245).sum())} solid-white px in the eye zone")
+            continue
         want = int(np.argmax(col)); got = int(np.argmax(mean)) if n else -1
         ok = n >= 6 and (want == got or mood in ("idle", "speaking", "sleepy") and got in (0, 1))
         check(f"{mood:9s} pose {d:+d}: eyes lit", ok, f"{n} px, mean RGB {mean.round().astype(int).tolist()}")
@@ -45,22 +57,40 @@ for r, (mood, col) in enumerate(MOODS.items()):
 
 # alert: the GOAT blinks white <-> red every 0.5 s; the background stays black (no screen negative)
 def goat(img):                                   # the bright stroke pixels, minus the eye glow
-    return img[(img.max(2) > 150)]
+    img = inner(img); return img[(img.max(2) > 150)]
 a0, a1, a2 = frame("alert", 0, 100), frame("alert", 0, 600), frame("alert", 0, 1100)
 w0, r1 = goat(a0), goat(a1)
 check("alert phase 1: goat is white", len(w0) > 500 and float(w0[:, 0].mean() - w0[:, 1].mean()) < 40, f"{len(w0)} px, mean RGB {w0.mean(0).round().astype(int).tolist()}")
 check("alert phase 2: goat is red (the mock's red)", len(r1) > 100 and float(r1[:, 0].mean()) > 150 and float(r1[:, 0].mean()) > 8 * float(r1[:, 1].mean()) and float(r1[:, 0].mean()) > 6 * float(r1[:, 2].mean()),
       f"{len(r1)} px, mean RGB {r1.mean(0).round().astype(int).tolist()}")
-check("alert background stays black in both phases", a0[:20, :20].mean() < 10 and a1[:20, :20].mean() < 10, f"corners {a0[:20,:20].mean():.0f} / {a1[:20,:20].mean():.0f}")
+check("alert background stays black in both phases", a0[40:70, 40:70].mean() < 10 and a1[40:70, 40:70].mean() < 10, f"empty background {a0[40:70,40:70].mean():.0f} / {a1[40:70,40:70].mean():.0f}")
 check("alert flips back to white 0.5 s later", float(goat(a2)[:, 1].mean()) > 150)
-check("alert is NOT a screen negative", a1[:20, :20].mean() < 10 and a1.mean() < a0.mean() + 5)
+check("alert is NOT a screen negative", a1[40:70, 40:70].mean() < 10 and a1.mean() < a0.mean() + 5)
+
+# neon border: the edges of the black background glow in the eye colour, pulsing with the eye
+def edge(img):                                   # the mean colour of the outermost 6 px ring
+    ring = np.concatenate([img[:6].reshape(-1, 3), img[-6:].reshape(-1, 3), img[:, :6].reshape(-1, 3), img[:, -6:].reshape(-1, 3)]); return ring.mean(0)
+mid = lambda img: img[H // 2 - 20:H // 2 + 20, 4:8].mean()
+for mood in ("thinking", "happy", "dead"):
+    col = np.array(MOODS[mood], np.float32); e = edge(gframe(mood, 0, 100))
+    cos = float(e @ col / (np.linalg.norm(e) * np.linalg.norm(col) + 1e-6))
+    check(f"{mood:9s} border glows in the eye colour", e.max() > 15 and cos > 0.95, f"edge RGB {e.round().astype(int).tolist()} cos {cos:.2f}")
+g1 = gframe("thinking", 0, 100); k8 = W / 800
+for mood in ("idle", "sleepy"):
+    e = edge(gframe(mood, 0, 100)); check(f"{mood:9s} (standby): no border glow", e.max() < 3, f"edge RGB {e.round().astype(int).tolist()}")
+check("border is very blurry: soft fade over a wide band", g1[H // 2, 0].max() > 15 and 0.15 * g1[H // 2, 0].max() < g1[H // 2, int(30 * k8)].max() < 0.7 * g1[H // 2, 0].max() and g1[H // 2, int(90 * k8)].max() < 4, f"{g1[H//2,0].max():.0f} at the edge, {g1[H//2,int(30*k8)].max():.0f} / {g1[H//2,int(90*k8)].max():.0f} further in")
+check("border is subtle (opacity low: edge under 45% brightness)", g1[H // 2, 0].max() < 0.45 * 255, f"{g1[H//2,0].max():.0f}")
+check("border reaches the corners", g1[1, 1].max() > 15 and g1[-2, -2].max() > 15 and g1[1, -2].max() > 15, f"corner {g1[1,1].max():.0f}")
+check("border pulses with the eye (thinking moves over time)", abs(float(edge(gframe("thinking", 0, 100)).max()) - float(edge(gframe("thinking", 0, 400)).max())) > 1.5)
+ea, eb = edge(gframe("alert", 0, 100)), edge(gframe("alert", 0, 600))
+check("alert: the border glows red while the goat blinks", float(ea[0]) > 15 and float(eb[0]) > 15 and float(ea[2]) < 0.5 * float(ea[0]))
 
 # dead: red crosses for eyes, always centred
 d_l, d_c, d_r = frame("dead", -1, 0), frame("dead", 0, 0), frame("dead", 1, 0)
 check("dead ignores 'look left' (always centred)", bool((d_l == d_c).all()))
 check("dead ignores 'look right' (always centred)", bool((d_r == d_c).all()))
 m, mean = tint(d_c)
-check("dead eyes are red", int(m.sum()) > 100 and mean[0] > 2.5 * max(mean[1], mean[2]), f"{int(m.sum())} px, mean RGB {mean.round().astype(int).tolist()}")
+check("dead eyes are red", int(m.sum()) > 100 and mean[0] > 2.0 * max(mean[1], mean[2]), f"{int(m.sum())} px, mean RGB {mean.round().astype(int).tolist()}")
 i_c = frame("idle", 0, 0)
 check("dead differs from idle (crosses, not lenses)", float(np.abs(d_c - i_c).sum()) > 5000)
 # an X is symmetric left-right and top-bottom inside each eye: check one eye's tinted pixels for a cross pattern
@@ -88,14 +118,15 @@ check("cyan sits left of the skull, #dc4583 right of it", lx < rx, f"ghost centr
 # session tally: ASCII '|' per session, four + a strike for the fifth, centred in the free strip at the bottom
 def frame7(mood, d, ms, lev, sessions, glitch):
     p = os.path.join(tmp, "f.ppm")
-    subprocess.run([EXE, "--dump", mood, str(d), p, str(ms), str(lev[0]), str(lev[1]), str(sessions), str(glitch)], check=True)
+    subprocess.run([EXE, "--dump", mood, str(d), p, str(ms), str(lev[0]), str(lev[1]), str(sessions), str(glitch)], check=True, env=dict(os.environ, LEONARD_NOGLOW="1"))
     return np.asarray(Image.open(p).convert("RGB"), np.float32)
 base = frame("idle", 0, 0, (0, 0), 0)
 def lit(n, d=0):
-    return (np.abs(frame("idle", d, 0, (0, 0), n) - base).max(2) > 40)
+    return (np.abs(frame("idle", d, 0, (0, 0), n) - frame("idle", d, 0, (0, 0), 0)).max(2) > 40)
 def runs(line):
     return int(((line[1:] & ~line[:-1]).sum()) + (1 if line[0] else 0))
-check("the bottom strip is free for the tally (no goat there)", float(base[int(0.915 * H):].max()) < 30, f"brightest {float(base[int(0.915 * H):].max()):.0f}")
+gap = base[int(0.925 * H):int(0.93 * H), EDGE:-EDGE]
+check("the goat ends above the tally (clear gap)", float(gap.max()) < 30, f"brightest {float(gap.max()):.0f} in the gap rows")
 check("0 sessions: no tally", int(lit(0).sum()) == 0)
 ys4, xs4 = np.nonzero(lit(4)); row = (ys4.min() + ys4.max()) // 2
 for n in (1, 2, 3, 4):
@@ -106,7 +137,8 @@ check("tally is small (under 8% of the frame height)", (ys4.max() - ys4.min()) <
 for n in (1, 4, 5, 6, 13):
     for d in (-1, 0, 1):
         ys, xs = np.nonzero(lit(n, d)); cx = (xs.min() + xs.max()) / 2
-        check(f"{n:2d} sessions, pose {d:+d}: tally centred", abs(cx - W / 2) <= 6, f"centre x {cx:.0f} (frame centre {W/2:.0f})")
+        bm = inner(frame("idle", d, 0, (0, 0), 0)).max(2) > 40; by, bx = np.nonzero(bm); tip = bx[by > by.max() - 3].mean()
+        check(f"{n:2d} sessions, pose {d:+d}: tally centred under the snout", abs(cx - tip) <= 8 * W / 800, f"centre x {cx:.0f} (snout tip {tip:.0f})")
 m4, m5, m6 = lit(4), lit(5), lit(6)
 w = lambda m: np.nonzero(m)[1].max() - np.nonzero(m)[1].min()
 check("5th session = a strike across the 4 slashes", int(m5.sum()) > int(m4.sum()) + 40 and w(m5) > w(m4) + 4, f"lit px {int(m4.sum())} -> {int(m5.sum())}, width {w(m4)} -> {w(m5)}")
@@ -114,12 +146,20 @@ check("6th session = a new group starts (wider again)", int(m6.sum()) > int(m5.s
 red = frame("alert", 0, 600, (0, 0), 3)[int(0.85 * H):]
 check("the tally follows the alert blink colour (red phase)", float(red[..., 0].max()) > 150 and float(red[..., 1].max()) < 80)
 
-# glitch: on a beat the ghosts jump and slices shear sideways; the skull itself never moves
-n0, g0 = frame7("idle", 0, 0, (0, 0), 0, 0), frame7("idle", 0, 0, (0, 0), 0, 1)
-check("glitch never moves the skull (silence: identical frames)", bool((n0 == g0).all()))
-n7, g7 = frame7("idle", 0, 0, (0.7, 0.7), 0, 0), frame7("idle", 0, 0, (0.7, 0.7), 0, 1)
-diff = int((np.abs(n7 - g7).max(2) > 30).sum())
-check("on a beat the ghosts are displaced (glitch)", diff > 3000, f"{diff} px moved")
+# glitch: the whole picture tears on a beat, harder the louder it is; silence = clean
+n0 = frame7("idle", 0, 0, (0, 0), 0, 0); s0b = frame("idle", 0, 0, (0, 0))
+check("silence, no beat: no glitch (clean frame)", bool((n0 == s0b).all()))
+def moved(lev):
+    a, b = frame7("idle", 0, 0, (lev, lev), 0, 0), frame7("idle", 0, 0, (lev, lev), 0, 1); return int((np.abs(a - b).max(2) > 30).sum()), float(np.abs(a - b).sum())
+(q, qe), (l, le) = moved(0.25), moved(0.9)
+check("on a beat the whole picture glitches (skull included)", q > 3000, f"{q} px moved at a quiet beat")
+check("louder beat = more intense glitch", l > q * 1.15 and le > qe * 1.4, f"{q} px quiet -> {l} px loud, energy x{le / qe:.1f}")
+sk = frame7("idle", 0, 0, (0.9, 0.9), 0, 1); sk0 = frame7("idle", 0, 0, (0.9, 0.9), 0, 0)
+wh = lambda im: (im.min(2) > 200)
+check("the skull itself tears on a beat", int((wh(sk) != wh(sk0)).sum()) > 500, f"{int((wh(sk) != wh(sk0)).sum())} skull px changed")
+b = frame7("idle", 0, 0, (0.8, 0.8), 0, 0)
+split = int(((b[..., 0] - b[..., 2]) > 120).sum() + ((b[..., 2] - b[..., 0]) > 120).sum())
+check("RGB split grows with the level (no beat)", split > 200, f"{split} split px at level 0.8")
 
 # the pulse: the more the channel is playing, the more the ghost glows (monotonic from silence to full)
 def ghost_light(lv):

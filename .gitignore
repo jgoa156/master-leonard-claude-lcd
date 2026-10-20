@@ -1,5 +1,6 @@
-﻿# build output (rebuilt by build.ps1)
-bin/
+# build output (rebuilt by build.ps1)
+bin/*
+!bin/leonard.exe
 build/
 gen/
 __pycache__/

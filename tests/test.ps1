@@ -1,4 +1,4 @@
-﻿# test.ps1 - full test of Master Leonard (single exe: bin\leonard.exe).
+# test.ps1 - full test of Master Leonard (single exe: bin\leonard.exe).
 #   .\tests\test.ps1 [-Real]
 # -Real also runs two short headless Claude Code sessions (uses a few hundred tokens).
 # -Audio plays two short quiet test tones (left, then right) and checks the audio ghosts hear the right channel.
@@ -12,12 +12,12 @@ $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'Master Leonard.lnk'
 $testDir = Join-Path $env:TEMP 'leonard_test'
 # The hook sections run a private copy of the app on its own port (LEONARD_PORT / LEONARD_DIR), so the real
 # Claude sessions on this machine, which report to the normal instance, cannot disturb the expected moods.
-function Use-Isolated { $env:LEONARD_PORT = '47999'; $env:LEONARD_DIR = $testDir; $script:status = Join-Path $testDir 'status.txt' }
-function Use-Normal   { $env:LEONARD_PORT = $null;   $env:LEONARD_DIR = $null;    $script:status = Join-Path $env:LOCALAPPDATA 'MasterLeonard\status.txt' }
+function Use-Isolated { $env:LEONARD_PORT = '47999'; $env:LEONARD_DIR = $testDir; $env:LEONARD_NOLCD = '1'; $script:status = Join-Path $testDir 'status.txt' }
+function Use-Normal   { $env:LEONARD_PORT = $null;   $env:LEONARD_DIR = $null;    $env:LEONARD_NOLCD = $null;    $script:status = Join-Path $env:LOCALAPPDATA 'MasterLeonard\status.txt' }
 $fail = 0
 function Check($name, $ok, $detail = '') { "{0} {1}{2}" -f $(if ($ok) { '[PASS]' } else { '[FAIL]' }), $name, $(if ($detail) { "  ($detail)" }); if (-not $ok) { $script:fail++ } }
 function Send-Hook($ev, $sid) { "{`"session_id`":`"$sid`",`"hook_event_name`":`"$ev`"}" | & $exe --hook }
-function Status { Start-Sleep -Milliseconds 500; ((Get-Content $status -ErrorAction SilentlyContinue) | Select-Object -First 1) }
+function Status { Start-Sleep -Milliseconds 800; ((Get-Content $status -ErrorAction SilentlyContinue) | Select-Object -First 1) }
 function Stop-App { if (Test-Path $exe) { & $exe --stop }; Start-Sleep -Milliseconds 800 }
 
 "== layout"
@@ -87,15 +87,12 @@ $pp = Private-Procs | Select-Object -First 1
 [W.U]::PostMessage($pp.MainWindowHandle, 0x10, [IntPtr]0, [IntPtr]0) | Out-Null; Start-Sleep 1
 $pp = Private-Procs | Select-Object -First 1
 Check 'closing the window hides it; the app keeps running' ($pp -and -not [W.U]::IsWindowVisible($pp.MainWindowHandle))
-# a plain launch (a double-click, no arguments) must show the window: that is the whole point of the default
+# a plain launch (a double-click, no arguments) runs in the tray: no window (the USB panel is the display)
 Stop-App; Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', "& '$exe'"; Start-Sleep 3
-Check 'a double-click (no arguments) shows the window' ((Private-Procs | Where-Object { $_.MainWindowTitle -like 'Master Leonard*' }).Count -eq 1)
 $pp = Private-Procs | Select-Object -First 1; $pid1 = $pp.Id
-[W.U]::PostMessage($pp.MainWindowHandle, 0x10, [IntPtr]0, [IntPtr]0) | Out-Null; Start-Sleep 1
-Check 'closing the window hides it' (-not [W.U]::IsWindowVisible((Private-Procs | Select-Object -First 1).MainWindowHandle))
+Check 'a double-click (no arguments) starts in the background (tray), no window' ($pp -and -not ($pp.MainWindowTitle -like 'Master Leonard*'))
 Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', "& '$exe'"; Start-Sleep 2.5
-$pp = Private-Procs | Select-Object -First 1
-Check 'a second double-click brings the same window back (same process, sessions kept)' ($pp -and $pp.Id -eq $pid1 -and [W.U]::IsWindowVisible($pp.MainWindowHandle) -and @(Private-Procs).Count -eq 1)
+Check 'a second double-click does not start a second copy' (@(Private-Procs).Count -eq 1 -and (Private-Procs | Select-Object -First 1).Id -eq $pid1)
 "== the window: no title bar, a hot-corner close button (this part moves your mouse for a second and puts it back)"
 Add-Type -AssemblyName System.Drawing
 Add-Type -Namespace W -Name N -MemberDefinition @'
@@ -183,6 +180,18 @@ Session P1 thinking; Session P2 happy; Session P3 alert;        Check 'alert bea
 Session P1 alert;    Session P2 thinking; Session P3 idle;      Check 'alert stays on top of busy sessions' ((Status) -like 'alert *')
 Send-Hook UserPromptSubmit P1                                   # the alerted session gets answered and works again
 Check 'alert clears when that session continues' ((Status) -like 'thinking *'); End-All
+
+"== attention required (a session needs you: permission prompt / waiting for input)"
+Session P1 thinking; Send-Hook Notification P1
+Check 'attention: a Notification flips the goat to alert' ((Status) -like 'alert *')
+Start-Sleep 6
+Check 'attention: it keeps asking for you (no auto-expiry after 6 s)' ((Status) -like 'alert *')
+Session P2 thinking
+Check 'attention: another busy session does not hide it' ((Status) -like 'alert *')
+Send-Hook PreToolUse P1                                          # you answered, the tool runs
+Check 'attention: cleared once the session works again (P2 still thinking)' ((Status) -like 'thinking *')
+Send-Hook Notification P2; Send-Hook SessionEnd P2
+Check 'attention: a session that ends while asking stops asking' ((Status) -notlike 'alert *'); End-All
 Session P1 thinking; Session P2 happy; Start-Sleep 7
 Check 'happy is momentary: back to thinking after ~6 s' ((Status) -like 'thinking *'); End-All
 Check 'no sessions = sleepy, the bottom' ((Status) -like 'sleepy *')

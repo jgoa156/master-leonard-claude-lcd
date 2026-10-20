@@ -18,7 +18,7 @@ sessions are doing, and its head follows your mouse. One exe does everything: `b
 | **happy** | green eyes | a run that used tools finished (a task) |
 | **speaking** | pale yellow flicker | a plain chat answer finished |
 | **thinking** | cyan eyes | a session is working |
-| **idle** | amber eyes | sessions open, quiet |
+| **idle** | white eyes | sessions open, quiet |
 | **sleepy** | dim amber line | no Claude session open |
 
 With several sessions, the highest in this order is shown (the table is `PRIORITY` in `src\avatar.h`):
@@ -35,7 +35,7 @@ never moves.
 right depending on where the cursor is (a cursor on another monitor counts as left / right of the primary one).
 Dead is always centred. `leonard.exe --no-follow` turns this off (the head then glances around by mood).
 
-**Session tally.** In a free strip at the bottom, centred: one ASCII `|` per open Claude session; four of them, and the
+**Session tally.** In a free strip at the bottom, centred under the snout: one ASCII `|` per open Claude session; four of them, and the
 fifth strikes them through (prison-style tally groups). Nothing is shown when no session is open.
 
 **The window** has no title bar: drag it by its picture. Its close button is an invisible hot corner at the top right,
@@ -52,8 +52,8 @@ double-click brings it back). The window is 12 x 7 cm on screen, with the 800x40
 .\tests\test.ps1 -Real -Audio  # full test (-Real: two short headless Claude sessions; -Audio: two quiet test tones)
 ```
 
-`leonard.exe` modes: *(none)* show the window · `--background` hidden, no window (the startup shortcut uses it) · `--hook` the Claude Code hook (reads JSON on stdin, sends one UDP
-packet, exits in ~6 ms) · `--set <mood> [id]` set a mood from a script, no Claude needed (`id` defaults to `cli`; unknown mood -> exit 2) · `--stop` · `--stale N` · `--no-follow` · `--no-audio` · `--meter N` · `--dump mood dir out.ppm [ms]`.
+`leonard.exe` modes: *(none)* show the window Â· `--background` hidden, no window (the startup shortcut uses it) Â· `--hook` the Claude Code hook (reads JSON on stdin, sends one UDP
+packet, exits in ~6 ms) Â· `--set <mood> [id]` set a mood from a script, no Claude needed (`id` defaults to `cli`; unknown mood -> exit 2) Â· `--stop` Â· `--stale N` Â· `--no-follow` Â· `--no-audio` Â· `--meter N` Â· `--dump mood dir out.ppm [ms]`.
 
 - Double-clicking (or `--preview`) while a copy is already running just brings **that** copy's window up, so it keeps its
   sessions. Closing the window (the hot corner, or Alt+F4) only hides it; `q` / Esc in the window quit the app; keys 1-7

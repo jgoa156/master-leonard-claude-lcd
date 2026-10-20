@@ -1,4 +1,4 @@
-﻿/* avatar.h - mood/state logic shared by leonard.c (the panel app) and the terminal version */
+/* avatar.h - mood/state logic shared by leonard.c (the panel app) and the terminal version */
 #ifndef AVATAR_H
 #define AVATAR_H
 #include <stdlib.h>
@@ -6,7 +6,7 @@
 
 enum { IDLE, THINKING, SPEAKING, HAPPY, ALERT, SLEEPY, DEAD, NSTATE };
 static const char *SNAME[NSTATE] = {"idle", "thinking", "speaking", "happy", "alert", "sleepy", "dead"};
-static const int ECOL[NSTATE][3] = {{255,150,0},{51,214,255},{255,236,150},{93,255,122},{255,30,30},{150,100,20},{210,20,20}};
+static const int ECOL[NSTATE][3] = {{255,255,255},{51,214,255},{255,236,150},{93,255,122},{255,30,30},{150,100,20},{210,20,20}};
 
 /* the red of the alert blink and of the dead eyes' crosses (sampled from the approved mock) */
 static const int BLINK_RED[3] = {230, 10, 16};

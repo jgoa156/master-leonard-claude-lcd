@@ -1,4 +1,4 @@
-﻿# build.ps1 - turn the text art into sprites and build the program.
+# build.ps1 - turn the text art into sprites and build the program.
 #   .\build.ps1                  5" panel, 800x480 (default)
 #   .\build.ps1 -Panel 480x320   3.5" panel
 # The art is plain text and is the source: assets\art\right.txt and assets\art\front.txt (edit them by hand).
@@ -6,7 +6,7 @@
 #                    -> tools\gen_panel.py   -> gen\panel.h     (panel bitmaps at the chosen resolution)
 #   src\leonard.c + gen\panel.h              -> bin\leonard.exe  (the one exe: app + Claude hook + preview + stop)
 #   legacy\terminal\impure_avatar.c          -> build\dev\impure_avatar.exe  (terminal version, dev only)
-param([string]$Panel = '800x400')
+param([string]$Panel = '1280x720')
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
@@ -29,6 +29,6 @@ New-Item -ItemType Directory -Force bin, build\dev, gen | Out-Null
 Step 'terminal sprites (gen\sprites.h)'    { python tools\gen_sprites.py }
 Step "panel bitmaps (gen\panel.h, $Panel)" { python tools\gen_panel.py ($Panel -split 'x') | Out-Null }
 
-Step 'bin\leonard.exe'                     { gcc -O2 -Wall -mwindows -I gen -I src -o bin\leonard.exe src\leonard.c -lgdi32 -lws2_32 -lole32 -lm }
+Step 'bin\leonard.exe'                     { gcc -O2 -Wall -mwindows -I gen -I src -o bin\leonard.exe src\leonard.c -lgdi32 -lws2_32 -lole32 -lsetupapi -lwinusb -lgdiplus -lm }
 Step 'dev: impure_avatar.exe'              { gcc -O2 -Wall -I gen -I src -o build\dev\impure_avatar.exe legacy\terminal\impure_avatar.c -lm }
 Write-Host '== build OK  ->  bin\leonard.exe'
