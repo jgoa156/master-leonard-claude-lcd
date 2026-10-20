@@ -29,6 +29,6 @@ New-Item -ItemType Directory -Force bin, build\dev, gen | Out-Null
 Step 'terminal sprites (gen\sprites.h)'    { python tools\gen_sprites.py }
 Step "panel bitmaps (gen\panel.h, $Panel)" { python tools\gen_panel.py ($Panel -split 'x') | Out-Null }
 
-Step 'bin\leonard.exe'                     { gcc -O2 -Wall -mwindows -I gen -I src -o bin\leonard.exe src\leonard.c -lgdi32 -lws2_32 -lole32 -lsetupapi -lwinusb -lgdiplus -lm }
+Step 'bin\leonard.exe'                     { gcc -O3 -ffast-math -Wall -mwindows -I gen -I src -o bin\leonard.exe src\leonard.c -lgdi32 -lws2_32 -lole32 -lsetupapi -lwinusb -lgdiplus -lm }
 Step 'dev: impure_avatar.exe'              { gcc -O2 -Wall -I gen -I src -o build\dev\impure_avatar.exe legacy\terminal\impure_avatar.c -lm }
 Write-Host '== build OK  ->  bin\leonard.exe'

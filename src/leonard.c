@@ -160,8 +160,9 @@ static void thick_init(void) {
 
 /* ---- audio ghosts: a cyan copy of the skull (left channel) and a #dc4583 copy (right channel) glow behind the
  *      white one, each as bright and as far out as its channel is loud. LEV = smoothed levels 0..1. */
+static float PULSE;                                          /* onset envelope 0..1.5: jumps on every hit, decays fast */
 static float LEV[2], RAW[2];                               /* smoothed 0..1 levels, and the last raw peaks */
-static const float GHOST_MAG = 1.5f;                             /* the #dc4583 copy: raised opacity */
+static const float GHOST_MAG = 2.1f;                             /* the #dc4583 copy: raised opacity */
 static const float GHOST_CYAN = 0.70f;                           /* the cyan copy shines a bit less than the #dc4583 one */
 /* glitch: on each beat the ghosts jump to a random offset and a few horizontal slices of them shear sideways,
  * for ~0.1-0.2 s, then they snap back. Only the ghosts move; the white skull stays put. */
@@ -169,6 +170,7 @@ static float GLX[2], GLY[2]; static int GBN, GB[8][3]; static long GLITCH_UNTIL,
 static float GLV;                                             /* how loud the beat was: glitch intensity 0..1 */
 static void glitch_kick(long t) {
     float sc = PANEL_W / 800.0f, lv = fmaxf(fmaxf(LEV[0], LEV[1]), fmaxf(RAW[0], RAW[1]));
+    lv = fmaxf(lv * 0.6f, fminf(PULSE, 1.0f));                 /* how hard the hit was, not how loud the song is */
     if (lv > 1) lv = 1;
     GLV = lv;
     for (int i = 0; i < 2; i++) { GLX[i] = (float)(rand() % 33 - 16) * sc * (1 + lv); GLY[i] = (float)(rand() % 9 - 4) * sc * (1 + lv); }
@@ -220,12 +222,20 @@ static void audio_poll(long t) {
                   FAILED(METER->lpVtbl->GetChannelsPeakValues(METER, ch > 8 ? 8 : ch, pk)))) { audio_close(); ch = 0; }
     float in[2] = {ch ? pk[0] : 0, ch > 1 ? pk[1] : (ch ? pk[0] : 0)};
     RAW[0] = in[0]; RAW[1] = in[1];
-    {   static float slow; float e = fmaxf(in[0], in[1]);                /* a beat: the level jumps above its recent average */
-        if (e > 0.08f && e > slow * 1.35f + 0.06f && t >= GLITCH_COOL) { glitch_kick(t); GLITCH_COOL = t + 180; }
-        slow += (e - slow) * 0.04f;
-    }
+    /* reactivity: a steady loud song must still move, so everything is driven by CHANGE, not by loudness.
+     * Onsets = the fast envelope rising over the slow one, normalised by how much the song usually moves (adaptive),
+     * and the level itself is auto-gained against the recent peak so a loud master does not just sit at 100%. */
+    static float fast, slow, favg = 0.02f, hold = 0.2f;
+    float e = fmaxf(in[0], in[1]);
+    fast += (e - fast) * 0.55f; slow += (e - slow) * 0.06f;
+    float flux = fmaxf(0, fast - slow), n = flux / (favg * 1.5f + 0.004f);   /* sensitive: soft songs count too */
+    favg += (flux - favg) * 0.02f;
+    PULSE = fmaxf(PULSE * 0.80f, clampf(n * 1.0f, 0, 1.5f));
+    if (e < 0.004f) PULSE *= 0.5f;
+    if (n > 0.45f && e > 0.01f && t >= GLITCH_COOL) { glitch_kick(t); GLITCH_COOL = t + 140; }      /* a hit */
+    hold = fmaxf(e, hold * 0.996f); if (hold < 0.03f) hold = 0.03f;
     for (int i = 0; i < 2; i++) {                           /* jump up fast, fade out slowly */
-        float v = clampf(in[i] * 1.25f, 0, 1);
+        float v = clampf(in[i] / hold * 0.85f, 0, 1);
         LEV[i] += (v - LEV[i]) * (v > LEV[i] ? 0.6f : 0.10f);
         if (LEV[i] < 0.005f) LEV[i] = 0;
     }
@@ -251,7 +261,8 @@ static void ghost_init(void) {
     }
 }
 
-static int FB_GLOW = 1; static float GLOW_COL[3], GLOW_K;       /* edge glow: in the frame (panel) or painted by the window */
+static int COMPOSE_MS; static int FB_GLOW = 1;
+static const float BORDER_W = 0.06f;                          /* the neon band: share of the short side */ static float GLOW_COL[3], GLOW_K;       /* edge glow: in the frame (panel) or painted by the window */
 static int imin(int a, int b) { return a < b ? a : b; }
 
 /* blend colour c at strength k (0..1) over the frame, keeping the brighter */
@@ -305,9 +316,14 @@ static void compose(const Av *a, long t) {
     if (red) for (int q = 0; q < 3; q++) ink[q] = BLINK_RED[q] / 255.0f;
     int pi = (a->state == DEAD ? 0 : a->dir) + 1;
     float sc = PANEL_W / 800.0f, L = LEV[0], Rt = LEV[1];
-    int oxL = (int)lroundf((3 + 9 * L) * sc), oxR = (int)lroundf((3 + 9 * Rt) * sc);   /* louder = further out */
+    int oxL = (int)lroundf((3 + 7 * L + 10 * PULSE * L) * sc), oxR = (int)lroundf((3 + 7 * Rt + 10 * PULSE * Rt) * sc);   /* louder = further out */
     int gl = t < GLITCH_UNTIL;                                /* a beat just hit: the ghosts are displaced */
-    float bl = powf(L, 0.75f), br = powf(Rt, 0.75f), boost = gl ? 1.3f : 1.0f;     /* brighter at low levels, flash on a beat */
+    float pz = 0.40f + 0.85f * PULSE;                        /* ghosts: dim when the song is steady, flare on every hit */
+    float bl = powf(L, 0.75f) * pz, br = powf(Rt, 0.75f) * pz, boost = gl ? 1.3f : 1.0f;     /* brighter at low levels, flash on a beat */
+    if (L <= 0.01f && Rt <= 0.01f && !gl) {                   /* silence: just the skull */
+        for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) { unsigned char g = TK[pi][y][x];
+            for (int q = 0; q < 3; q++) FB[y][x][q] = (unsigned char)(g * ink[q]); }
+    } else
     for (int y = 0; y < PANEL_H; y++) {
         int bdx = 0;
         if (gl) for (int b = 0; b < GBN; b++) if (y >= GB[b][0] && y < GB[b][1]) bdx = GB[b][2];
@@ -351,19 +367,24 @@ static void compose(const Av *a, long t) {
     /* neon border: the edges of the black background glow in the eye colour, very soft, pulsing with the eye.
      * The window paints it itself over its whole client area (corners included); the panel gets it from the frame. */
     for (int q = 0; q < 3; q++) GLOW_COL[q] = glow[q];
-    GLOW_K = (a->state == IDLE || a->state == SLEEPY) ? 0 : m * 0.5f;   /* standby (idle / sleepy): no border */
-    if (FB_GLOW) {
-        float bw = 0.2f * (float)(PANEL_W < PANEL_H ? PANEL_W : PANEL_H);
-        for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) {
-            float e = (float)imin(imin(x, PANEL_W - 1 - x), imin(y, PANEL_H - 1 - y)) + 0.5f;
-            if (e < bw) lit(x, y, GLOW_COL, powf(1 - e / bw, 3.0f) * GLOW_K);
+    GLOW_K = (a->state == IDLE || a->state == SLEEPY) ? 0 : m * (0.22f + 0.15f * fmaxf(LEV[0], LEV[1]) + 0.6f * fminf(PULSE, 1.2f));   /* the level breathes it too */   /* low at rest, flares on hits */   /* standby (idle / sleepy): no border */
+    if (FB_GLOW && GLOW_K > 0) {
+        int bw = (int)(BORDER_W * (float)(PANEL_W < PANEL_H ? PANEL_W : PANEL_H)); if (bw < 2) bw = 2; if (bw > 256) bw = 256;
+        float lut[256]; for (int e = 0; e < bw; e++) lut[e] = powf(1 - (e + 0.5f) / bw, 2.6f) * GLOW_K;
+        for (int y = 0; y < PANEL_H; y++) {
+            int ey = imin(y, PANEL_H - 1 - y);
+            for (int x = 0; x < PANEL_W; x++) {
+                if (ey >= bw && x == bw) { x = PANEL_W - 1 - bw; continue; }        /* skip the middle of the row */
+                int e = imin(ey, imin(x, PANEL_W - 1 - x));
+                if (e < bw) lit(x, y, GLOW_COL, lut[e]);
+            }
         }
     }
     tally(a->sessions, PAN_TIP[pi], ink);                                  /* one slash per open session, centred on top */
 
     /* glitch over the whole picture: RGB split that grows with the level, and on a beat torn slices shoved sideways */
     {   float lv = fmaxf(L, Rt), sc2 = PANEL_W / 800.0f;
-        int ca = (int)(lv * lv * 7 * sc2) + (gl ? (int)((3 + 10 * GLV) * sc2) : 0);
+        int ca = (int)((lv * 2 + PULSE * PULSE * 9) * sc2) + (gl ? (int)((3 + 10 * GLV) * sc2) : 0);   /* RGB split rides the hits */
         static int off = -1; if (off < 0) off = getenv("LEONARD_NOGLITCH") != NULL;   /* tests: clean frames */
         if (!off && (ca > 0 || gl)) {
             static unsigned char row[PANEL_W][3];
@@ -479,9 +500,9 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         if (!FB_GLOW && cw > 8 && ch > 8) {                  /* the neon border, over the whole client area, corners included */
             unsigned int *g = (unsigned int *)malloc((size_t)cw * ch * 4);
             if (g) {
-                float bw = 0.2f * (float)(cw < ch ? cw : ch);
+                float bw = BORDER_W * (float)(cw < ch ? cw : ch);
                 for (int y = 0; y < ch; y++) for (int x = 0; x < cw; x++) {
-                    float e = (float)imin(imin(x, cw - 1 - x), imin(y, ch - 1 - y)) + 0.5f, k = e < bw ? powf(1 - e / bw, 3.0f) * GLOW_K : 0;
+                    float e = (float)imin(imin(x, cw - 1 - x), imin(y, ch - 1 - y)) + 0.5f, k = e < bw ? powf(1 - e / bw, 2.6f) * GLOW_K : 0;
                     g[(size_t)y * cw + x] = ((unsigned)(GLOW_COL[0] * k) << 16) | ((unsigned)(GLOW_COL[1] * k) << 8) | (unsigned)(GLOW_COL[2] * k);
                 }
                 BITMAPINFO gi = {{sizeof(BITMAPINFOHEADER), cw, -ch, 1, 32, BI_RGB}};
@@ -575,7 +596,8 @@ int main(int argc, char **argv) {
     Av a = {0}; a.t0 = (long)GetTickCount64();
 
     if (dump) {                                           /* --dump state dir out.ppm [ms] */
-        if (getenv("LEONARD_NOGLOW")) FB_GLOW = 0;          /* tests: a frame without the edge glow */
+        if (getenv("LEONARD_NOGLOW")) FB_GLOW = 0;
+        if (getenv("LEONARD_PULSE")) PULSE = (float)atof(getenv("LEONARD_PULSE"));   /* tests / mockups: a hit in progress */          /* tests: a frame without the edge glow */
         a.state = st; a.dir = argc > ai + 1 ? atoi(argv[ai + 1]) : 0;
         thick_init(); ghost_init();
         if (argc > ai + 5) { LEV[0] = (float)atof(argv[ai + 4]); LEV[1] = (float)atof(argv[ai + 5]); }   /* audio levels to show */
@@ -690,12 +712,12 @@ int main(int argc, char **argv) {
         if (a.state == DEAD) a.dir = 0;                      /* dead: centred, never follows */
         a.sessions = NS;
         if (hw && IsWindowVisible(hw)) { POINT cp; GetCursorPos(&cp); CLOSE_HOVER = in_close(hw, cp.x, cp.y); } else CLOSE_HOVER = 0;
-        if (!dorm) { compose(&a, t); lcd_push(&FB[0][0][0]); }                              /* to the USB panel (when connected) */
+        if (!dorm) { LARGE_INTEGER c0, c1, cf; QueryPerformanceFrequency(&cf); QueryPerformanceCounter(&c0); compose(&a, t); QueryPerformanceCounter(&c1); COMPOSE_MS = (int)((c1.QuadPart - c0.QuadPart) * 1000 / cf.QuadPart); lcd_push(&FB[0][0][0]); }                              /* to the USB panel (when connected) */
         {   /* status file: shown mood + every session's own mood, rewritten whenever any of it changes */
             char sig[2048]; static const char *LOOK[3] = {"left", "center", "right"};
             int n = snprintf(sig, sizeof sig, "%s %d audio=%c%c lcd=%s look=%s\n", SNAME[a.state], NS,
                              LEV[0] > 0.15f ? 'L' : '-', LEV[1] > 0.15f ? 'R' : '-', LCD_ON ? LCD_NAME : LCD_ERR, LOOK[a.dir + 1]);
-            if (LCD_ON) n += snprintf(sig + n, sizeof sig - n, "lcd fps=%.1f\n", LCD_FPS10 / 10.0);   /* audio: coarse, so it is not rewritten every frame */
+            if (LCD_ON) n += snprintf(sig + n, sizeof sig - n, "lcd fps=%.1f compose=%dms enc=%dms usb=%dms jpeg=%dKB\n", LCD_FPS10 / 10.0, COMPOSE_MS, LCD_ENC_MS, LCD_USB_MS, LCD_KB);   /* audio: coarse, so it is not rewritten every frame */
             for (int i = 0; i < NS && n < 1900; i++) n += snprintf(sig + n, sizeof sig - n, "  ...%.8s %s%s\n", SS[i].id + (strlen(SS[i].id) > 8 ? strlen(SS[i].id) - 8 : 0), SNAME[SS[i].mood], SS[i].worked ? " (worked)" : "");
             if (strcmp(sig, last_sig)) { strcpy(last_sig, sig); FILE *f = rt_fopen("status.txt", "w"); if (f) { fputs(sig, f); fclose(f); } }
         }        if (hw) {
@@ -705,7 +727,7 @@ int main(int argc, char **argv) {
             SetWindowText(hw, title);
             InvalidateRect(hw, NULL, FALSE);
         }
-        Sleep(dorm ? 100 : 33);                               /* dormant: a slow, cheap tick that still answers hooks quickly */
+        { long el = (long)GetTickCount64() - t; Sleep(dorm ? 100 : (el < 30 ? 33 - el : 3)); }   /* ~30 fps, whatever the frame cost */                               /* dormant: a slow, cheap tick that still answers hooks quickly */
     }
     if (LCD_ON) { LCD_STOP = 1; for (int k = 0; k < 40 && LCD_ON; k++) Sleep(100); }   /* exit: leave the panel dark */
     Shell_NotifyIconA(NIM_DELETE, &NID);

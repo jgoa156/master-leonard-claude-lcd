@@ -103,7 +103,7 @@ static int lcd_xfer(unsigned char *buf, ULONG n, unsigned char reply[512]) {
     if (!WinUsb_WritePipe(LCD_USB, 0x01, buf, n, &done, NULL) || done != n) return 0;
     ULONG got = 0;                                                   /* the reply: optional (some commands stay silent) */
     if (!WinUsb_ReadPipe(LCD_USB, 0x81, reply, 512, &got, NULL)) return 1;
-    ULONG t0 = 30, t1 = 2000; unsigned char junk[512];                /* drain anything extra, like the reference does */
+    ULONG t0 = 15, t1 = 2000; unsigned char junk[512];                /* the panel may answer more than once: drain it, or it stalls */
     WinUsb_SetPipePolicy(LCD_USB, 0x81, PIPE_TRANSFER_TIMEOUT, sizeof t0, &t0);
     for (int k = 0; k < 4 && WinUsb_ReadPipe(LCD_USB, 0x81, junk, 512, &got, NULL); k++) ;
     WinUsb_SetPipePolicy(LCD_USB, 0x81, PIPE_TRANSFER_TIMEOUT, sizeof t1, &t1);
@@ -214,7 +214,7 @@ static unsigned char *lcd_jpeg(const unsigned char *rgb, int fw, int fh, int fli
 /* ------------------------------------------------------------ worker: finds the panel, then sends the latest frame */
 static CRITICAL_SECTION LCD_CS; static unsigned char *LCD_FRAME; static int LCD_NEW, LCD_FLIP = 1, LCD_BRIGHT = 80;
 static volatile int LCD_ON, LCD_STOP;                                   /* STOP: blank the panel, release it, stop looking */
-static volatile LONG LCD_FPS10;                                           /* frames per second x10, for status */
+static volatile LONG LCD_FPS10; static volatile int LCD_ENC_MS, LCD_USB_MS, LCD_KB;                                           /* frames per second x10, for status */
 static DWORD WINAPI lcd_thread(void *arg) {
     (void)arg;
     unsigned char *frame = (unsigned char *)malloc((size_t)PANEL_W * PANEL_H * 3);
@@ -243,11 +243,15 @@ static DWORD WINAPI lcd_thread(void *arg) {
         if (LCD_NEW) { memcpy(frame, LCD_FRAME, (size_t)PANEL_W * PANEL_H * 3); LCD_NEW = 0; have = 1; }
         LeaveCriticalSection(&LCD_CS);
         if (!have) { Sleep(5); continue; }
+        LARGE_INTEGER q0, q1, q2, qf; QueryPerformanceFrequency(&qf); QueryPerformanceCounter(&q0);
         ULONG n = 0; unsigned char *buf = lcd_jpeg(frame, PANEL_W, PANEL_H, LCD_FLIP, &n), reply[512];
+        QueryPerformanceCounter(&q1);
         if (!buf) { snprintf(LCD_ERR, sizeof LCD_ERR, "jpeg encode failed"); Sleep(50); continue; }
         unsigned char len[4] = {(unsigned char)(n >> 24), (unsigned char)(n >> 16), (unsigned char)(n >> 8), (unsigned char)n};
         lcd_seal(101, len, 4, buf);
         int ok = lcd_xfer(buf, 512 + n, reply);
+        QueryPerformanceCounter(&q2);
+        LCD_ENC_MS = (int)((q1.QuadPart - q0.QuadPart) * 1000 / qf.QuadPart); LCD_USB_MS = (int)((q2.QuadPart - q1.QuadPart) * 1000 / qf.QuadPart); LCD_KB = (int)(n / 1024);
         free(buf);
         if (!ok) { snprintf(LCD_ERR, sizeof LCD_ERR, "frame write failed (%lu) jpeg=%lu", GetLastError(), n); lcd_close(); LCD_ON = 0; Sleep(500); continue; }       /* unplugged / turned off: back to searching */
         fps_n++;
