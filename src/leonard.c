@@ -33,6 +33,7 @@
 #include <mmdeviceapi.h>
 #include "panel.h"
 #include "avatar.h"
+#define BORDER_W 0.06f                                       /* the neon glow band (border and skull glow): share of the short side */
 
 /* UDP port the hook sends to and the app listens on; LEONARD_PORT overrides it (tests run an isolated copy) */
 static int port(void) { char b[16]; return GetEnvironmentVariableA("LEONARD_PORT", b, sizeof b) ? atoi(b) : 47474; }
@@ -241,6 +242,30 @@ static void audio_poll(long t) {
         if (LEV[i] < 0.005f) LEV[i] = 0;
     }
 }
+/* the status glow behind the skull: a copy of the skull, blurred exactly like the neon border (same band width and
+ * falloff, measured from the strokes outwards), tinted with the eye colour and pulsing with the border */
+static unsigned char SG[3][PANEL_H][PANEL_W]; static int SKULL_GLOW = 1;
+static void sglow_init(void) {
+    static float d[PANEL_H][PANEL_W];
+    float bw = BORDER_W * (float)(PANEL_W < PANEL_H ? PANEL_W : PANEL_H);
+    for (int p = 0; p < 3; p++) {
+        for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) d[y][x] = TK[p][y][x] > 60 ? 0 : 1e9f;
+        for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) {          /* chamfer distance, two passes */
+            float v = d[y][x];
+            if (x > 0) v = fminf(v, d[y][x - 1] + 1);
+            if (y > 0) { v = fminf(v, d[y - 1][x] + 1); if (x > 0) v = fminf(v, d[y - 1][x - 1] + 1.4142f); if (x < PANEL_W - 1) v = fminf(v, d[y - 1][x + 1] + 1.4142f); }
+            d[y][x] = v;
+        }
+        for (int y = PANEL_H - 1; y >= 0; y--) for (int x = PANEL_W - 1; x >= 0; x--) {
+            float v = d[y][x];
+            if (x < PANEL_W - 1) v = fminf(v, d[y][x + 1] + 1);
+            if (y < PANEL_H - 1) { v = fminf(v, d[y + 1][x] + 1); if (x < PANEL_W - 1) v = fminf(v, d[y + 1][x + 1] + 1.4142f); if (x > 0) v = fminf(v, d[y + 1][x - 1] + 1.4142f); }
+            d[y][x] = v;
+        }
+        for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++)
+            SG[p][y][x] = d[y][x] < bw ? (unsigned char)(255 * powf(1 - d[y][x] / bw, 2.6f)) : 0;
+    }
+}
 static void ghost_init(void) {
     static float a[PANEL_H][PANEL_W], b[PANEL_H][PANEL_W];
     const int R = PANEL_W >= 800 ? 4 : 3;
@@ -263,7 +288,7 @@ static void ghost_init(void) {
 }
 
 static int COMPOSE_MS; static int FB_GLOW = 1;
-static const float BORDER_W = 0.06f;                          /* the neon band: share of the short side */ static float GLOW_COL[3], GLOW_K;       /* edge glow: in the frame (panel) or painted by the window */
+static float GLOW_COL[3], GLOW_K;       /* edge glow: in the frame (panel) or painted by the window */
 static int imin(int a, int b) { return a < b ? a : b; }
 
 /* blend colour c at strength k (0..1) over the frame, keeping the brighter */
@@ -341,6 +366,16 @@ static void compose(const Av *a, long t) {
             float v = fmaxf(clampf(bg[q], 0, 1) * 255, g * ink[q]);    /* the skull is drawn over its ghosts */
             FB[y][x][q] = (unsigned char)clampf(v, 0, 255);
         }
+        }
+    }
+    {   /* status glow behind the skull: same colour and strength as the border (computed below, so recompute here) */
+        float pm = av_pulse(a, t), k = (a->state == IDLE || a->state == SLEEPY) ? 0 : pm * (0.22f + 0.15f * fmaxf(LEV[0], LEV[1]) + 0.6f * fminf(PULSE, 1.2f));
+        if (SKULL_GLOW && k > 0.003f) {
+            float col[3]; for (int q = 0; q < 3; q++) col[q] = (float)ECOL[a->state][q] * k / 255.0f;
+            for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) {
+                unsigned char g = SG[pi][y][x];
+                if (g) for (int q = 0; q < 3; q++) { int v = (int)(g * col[q]); if (v > FB[y][x][q]) FB[y][x][q] = (unsigned char)v; }
+            }
         }
     }
     float m = av_pulse(a, t), glow[3], hot[3];
@@ -599,10 +634,11 @@ int main(int argc, char **argv) {
     Av a = {0}; a.t0 = (long)GetTickCount64();
 
     if (dump) {                                           /* --dump state dir out.ppm [ms] */
-        if (getenv("LEONARD_NOGLOW")) FB_GLOW = 0;
+        if (getenv("LEONARD_NOGLOW")) FB_GLOW = SKULL_GLOW = 0;
+        if (getenv("LEONARD_NOSKULLGLOW")) SKULL_GLOW = 0;
         if (getenv("LEONARD_PULSE")) PULSE = (float)atof(getenv("LEONARD_PULSE"));   /* tests / mockups: a hit in progress */          /* tests: a frame without the edge glow */
         a.state = st; a.dir = argc > ai + 1 ? atoi(argv[ai + 1]) : 0;
-        thick_init(); ghost_init();
+        thick_init(); ghost_init(); sglow_init();
         if (argc > ai + 5) { LEV[0] = (float)atof(argv[ai + 4]); LEV[1] = (float)atof(argv[ai + 5]); }   /* audio levels to show */
         if (argc > ai + 6) a.sessions = atoi(argv[ai + 6]);                    /* ... [L R [sessions [glitch]]] */
         if (argc > ai + 7 && atoi(argv[ai + 7])) { srand(7); glitch_kick(a.t0); GLITCH_UNTIL = a.t0 + 3600000L; }
@@ -648,7 +684,7 @@ int main(int argc, char **argv) {
     }
     rt_init();
     { FILE *f = rt_fopen("events.log", "w"); if (f) fclose(f); }   /* fresh event log per run */
-    thick_init(); ghost_init();
+    thick_init(); ghost_init(); sglow_init();
     if (audio) CoInitializeEx(NULL, COINIT_MULTITHREADED);
     { FILE *f = rt_fopen("settings.txt", "r"); int v; if (f) { if (fscanf(f, "flip=%d", &v) == 1) LCD_FLIP = v; fclose(f); } }
     if (getenv("LEONARD_NOLCD")) lcd = 0;                    /* tests: private copies never touch the panel */

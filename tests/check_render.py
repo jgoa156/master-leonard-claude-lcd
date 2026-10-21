@@ -18,8 +18,8 @@ def frame(mood, d, ms=0, lev=None, sessions=None):
     subprocess.run([EXE, "--dump", mood, str(d), p, str(ms)] + extra, check=True, env=dict(os.environ, LEONARD_NOGLOW="1", LEONARD_NOGLITCH="1"))   # no edge glow, no glitch
     return np.asarray(Image.open(p).convert("RGB"), np.float32)
 
-def gframe(mood, d, ms=0, pulse=0):             # a frame WITH the edge glow (pulse = a hit in progress)
-    p = os.path.join(tmp, "g.ppm"); subprocess.run([EXE, "--dump", mood, str(d), p, str(ms)], check=True, env=dict(os.environ, LEONARD_PULSE=str(pulse)))
+def gframe(mood, d, ms=0, pulse=0, skull=False):             # a frame WITH the edge glow (pulse = a hit in progress)
+    p = os.path.join(tmp, "g.ppm"); subprocess.run([EXE, "--dump", mood, str(d), p, str(ms)], check=True, env=dict(os.environ, LEONARD_PULSE=str(pulse), **({} if skull else {"LEONARD_NOSKULLGLOW": "1"})))
     return np.asarray(Image.open(p).convert("RGB"), np.float32)
 
 def check(name, ok, detail=""):
@@ -87,6 +87,15 @@ check("border reaches the corners", g1[1, 1].max() > 15 and g1[-2, -2].max() > 1
 check("border pulses with the eye (thinking moves over time)", abs(float(edge(gframe("thinking", 0, 100)).max()) - float(edge(gframe("thinking", 0, 400)).max())) > 1.5)
 ea, eb = edge(gframe("alert", 0, 100)), edge(gframe("alert", 0, 600))
 check("alert: the border glows red while the goat blinks", float(ea[0]) > 6 and float(eb[0]) > 6 and float(ea[2]) < 0.5 * float(ea[0]))
+
+# status glow behind the skull: a blurred copy of the skull in the eye colour, pulsing like the border
+def tinted(img): m = (img.max(2) - img.min(2)) > 20; return m, (img[m].mean(0) if m.any() else np.zeros(3))
+sg_hit, sg_rest = gframe("thinking", 0, 100, 1.0, True), gframe("thinking", 0, 100, 1.0, False)
+mm, mc = tinted(np.clip(sg_hit - sg_rest, 0, None)); col = np.array(MOODS["thinking"], np.float32)
+check("skull glow: a blurred copy around the skull in the eye colour", int(mm.sum()) > 20000 and float(mc @ col / (np.linalg.norm(mc) * np.linalg.norm(col) + 1e-6)) > 0.9, f"{int(mm.sum())} px, mean RGB {mc.round().astype(int).tolist()}")
+a0, a1 = gframe("thinking", 0, 100, 0.0, True), gframe("thinking", 0, 100, 0.0, False)
+check("skull glow pulses: brighter on a hit than at rest", float((sg_hit - sg_rest).sum()) > 2 * float((a0 - a1).sum()) > 0)
+check("skull glow: none on standby (idle)", bool((gframe("idle", 0, 100, 1.0, True) == gframe("idle", 0, 100, 1.0, False)).all()))
 
 # dead: red crosses for eyes, always centred
 d_l, d_c, d_r = frame("dead", -1, 0), frame("dead", 0, 0), frame("dead", 1, 0)
