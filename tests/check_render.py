@@ -1,4 +1,4 @@
-# Pixel-level check of leonard.exe frames: every mood x pose, the alert blink and the dead goat.
+﻿# Pixel-level check of leonard.exe frames: every mood x pose, the alert blink and the dead goat.
 #   python tests\check_render.py   -> prints PASS/FAIL per check, writes build\render_check.png
 import os, subprocess, tempfile
 from PIL import Image
@@ -67,6 +67,8 @@ check("alert background stays black in both phases", a0[40:70, 40:70].mean() < 1
 check("alert flips back to white 0.5 s later", float(goat(a2)[:, 1].mean()) > 150)
 check("alert is NOT a screen negative", a1[40:70, 40:70].mean() < 10 and a1.mean() < a0.mean() + 5)
 
+bm0 = inner(frame("idle", 0, 0, (0, 0), 0)).max(2) > 40; by0, bx0 = np.nonzero(bm0)
+check("the centred skull: its snout sits on the panel centre", abs(bx0[by0 > by0.max() - 3].mean() - W / 2) <= 3 * W / 800, f"snout x {bx0[by0 > by0.max() - 3].mean():.0f} vs {W/2:.0f}")
 # neon border: the edges of the black background glow in the eye colour, pulsing with the eye
 def edge(img):                                   # the mean colour of the outermost 6 px ring
     ring = np.concatenate([img[:6].reshape(-1, 3), img[-6:].reshape(-1, 3), img[:, :6].reshape(-1, 3), img[:, -6:].reshape(-1, 3)]); return ring.mean(0)
@@ -149,8 +151,7 @@ check("tally is small (under 8% of the frame height)", (ys4.max() - ys4.min()) <
 for n in (1, 4, 5, 6, 13):
     for d in (-1, 0, 1):
         ys, xs = np.nonzero(lit(n, d)); cx = (xs.min() + xs.max()) / 2
-        bm = inner(frame("idle", d, 0, (0, 0), 0)).max(2) > 40; by, bx = np.nonzero(bm); tip = bx[by > by.max() - 3].mean()
-        check(f"{n:2d} sessions, pose {d:+d}: tally centred under the snout", abs(cx - tip) <= 8 * W / 800, f"centre x {cx:.0f} (snout tip {tip:.0f})")
+        check(f"{n:2d} sessions, pose {d:+d}: tally centred on the panel (does not follow the head)", abs(cx - W / 2) <= 6 * W / 800, f"centre x {cx:.0f} (panel centre {W/2:.0f})")
 m4, m5, m6 = lit(4), lit(5), lit(6)
 w = lambda m: np.nonzero(m)[1].max() - np.nonzero(m)[1].min()
 check("5th session = a strike across the 4 slashes", int(m5.sum()) > int(m4.sum()) + 40 and w(m5) > w(m4) + 4, f"lit px {int(m4.sum())} -> {int(m5.sum())}, width {w(m4)} -> {w(m5)}")

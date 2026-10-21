@@ -33,6 +33,7 @@
 #include <mmdeviceapi.h>
 #include "panel.h"
 #include "avatar.h"
+#define SKULL_GAIN 1.8f                                      /* how much stronger the skull glow is than the border */
 #define BORDER_W 0.06f                                       /* the neon glow band (border and skull glow): share of the short side */
 
 /* UDP port the hook sends to and the app listens on; LEONARD_PORT overrides it (tests run an isolated copy) */
@@ -371,7 +372,7 @@ static void compose(const Av *a, long t) {
     {   /* status glow behind the skull: same colour and strength as the border (computed below, so recompute here) */
         float pm = av_pulse(a, t), k = (a->state == IDLE || a->state == SLEEPY) ? 0 : pm * (0.22f + 0.15f * fmaxf(LEV[0], LEV[1]) + 0.6f * fminf(PULSE, 1.2f));
         if (SKULL_GLOW && k > 0.003f) {
-            float col[3]; for (int q = 0; q < 3; q++) col[q] = (float)ECOL[a->state][q] * k / 255.0f;
+            float col[3]; for (int q = 0; q < 3; q++) col[q] = fminf(1.0f, (float)ECOL[a->state][q] * k * SKULL_GAIN / 255.0f) * 1.0f;
             for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) {
                 unsigned char g = SG[pi][y][x];
                 if (g) for (int q = 0; q < 3; q++) { int v = (int)(g * col[q]); if (v > FB[y][x][q]) FB[y][x][q] = (unsigned char)v; }
@@ -416,7 +417,7 @@ static void compose(const Av *a, long t) {
             }
         }
     }
-    tally(a->sessions, PAN_TIP[pi], ink);                                  /* one slash per open session, centred on top */
+    tally(a->sessions, PANEL_W / 2, ink);                                  /* one slash per open session, centred on top */
 
     /* glitch over the whole picture: RGB split that grows with the level, and on a beat torn slices shoved sideways */
     {   float lv = fmaxf(L, Rt), sc2 = PANEL_W / 800.0f;
