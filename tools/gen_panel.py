@@ -82,6 +82,20 @@ with open(P.GEN / "panel.h", "w") as f:
         f.write(f"static const float PEYE_{name}[2][4] = {{" +
                 ", ".join("{%.1f, %.1f, %.2f, %.2f}" % e for e in peyes) + "};\n")
         print(name, ["(%.0f,%.0f r%.1fx%.1f)" % e for e in peyes])
+    # the Hunter's Mark (shown instead of the skull while Bloodborne's bb-probe.exe runs): white strokes on black,
+    # fitted to the same box as the poses and centred on the panel
+    mk = Image.open(P.ROOT / "assets" / "art" / "hunter_mark.png").convert("L").point(lambda v: 235 if v > 128 else 0)
+    mk = mk.crop(mk.getbbox())
+    s = min((PW - 2 * MARGIN) / mk.width, (PH - MARGIN - BAND + 6) / mk.height)
+    mk = mk.resize((round(mk.width * s), round(mk.height * s)), Image.LANCZOS)
+    if PW > 480: mk = mk.point(lambda v: min(255, int(v * GAIN)))
+    img = Image.new("L", (PW, PH)); img.paste(mk, ((PW - mk.width) // 2, MARGIN + (PH - MARGIN - BAND + 6 - mk.height) // 2))
+    img.save(P.BUILD / "panel_mark.png")
+    data = img.tobytes()
+    f.write(f"static const unsigned char PAN_MARK[{PW * PH}] = {{\n")
+    for i in range(0, len(data), 32):
+        f.write(",".join(str(b) for b in data[i:i + 32]) + ",\n")
+    f.write("};\n")
     f.write("static const int PAN_TIP[3] = {%d, %d, %d};   /* x of the snout tip per pose (left, front, right) */\n" % tuple(TIPS))
     f.write("/* session tally: ASCII glyphs, a row centred in the bottom strip */\n")
     f.write("#define TALLY_H %d\n#define TALLY_CW %d\n#define TALLY_Y %d\n#define TALLY_SW %d\n#define TALLY_SH %d\n" % (TH, TCW, TY, SW, SH))

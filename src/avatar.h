@@ -14,7 +14,7 @@ static const int BLINK_RED[3] = {230, 10, 16};
 /* Which mood is SHOWN when several Claude sessions disagree: the highest number wins. Reorder it here.
  *   dead     out of credits / usage limit (StopFailure)  - on top: nothing can work. Eyes are red crosses,
  *            head always centred. Clears when that session sends its next event (credits are back).
- *   alert    a session needs you (permission / input)  - the goat blinks white <-> red
+ *   alert    a session needs you (permission / input)  - the goat blinks white / red, then the screen goes negative
  *   happy    a run that used tools just finished
  *   speaking a plain answer just arrived
  *   thinking a session is working                      - below the "something finished" moods

@@ -14,7 +14,7 @@ sessions are doing, and its head follows your mouse. One exe does everything: `b
 | Mood | What you see | When |
 |---|---|---|
 | **dead** | eyes are red crosses, head always centred | out of credits / usage limit / account on hold |
-| **alert** | the whole goat blinks white <-> red every 0.5 s | a session needs you (permission / input), or another API error |
+| **alert** | the goat blinks white, red, then the whole screen flips to a black & white negative (0.5 s each) | a session needs you (permission / input), or another API error |
 | **happy** | green eyes | a run that used tools finished (a task) |
 | **speaking** | pale yellow flicker | a plain chat answer finished |
 | **thinking** | red eyes, pulsing | a session is working |

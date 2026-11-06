@@ -55,17 +55,21 @@ for r, (mood, col) in enumerate(MOODS.items()):
         if n: check(f"{mood:9s} pose {d:+d}: eyes inside skull area", 0.25 * W < xs.mean() < 0.75 * W and 0.19 * H < ys.mean() < 0.81 * H,
                     f"centre ({xs.mean():.0f},{ys.mean():.0f})")
 
-# alert: the GOAT blinks white <-> red every 0.5 s; the background stays black (no screen negative)
+# alert: the GOAT blinks white <-> red (background black), then a black & white negative: a 1.5 s cycle
 def goat(img):                                   # the bright stroke pixels, minus the eye glow
     img = inner(img); return img[(img.max(2) > 150)]
-a0, a1, a2 = frame("alert", 0, 100), frame("alert", 0, 600), frame("alert", 0, 1100)
+a0, a1 = frame("alert", 0, 100), frame("alert", 0, 600)
 w0, r1 = goat(a0), goat(a1)
 check("alert phase 1: goat is white", len(w0) > 500 and float(w0[:, 0].mean() - w0[:, 1].mean()) < 40, f"{len(w0)} px, mean RGB {w0.mean(0).round().astype(int).tolist()}")
 check("alert phase 2: goat is red (the mock's red)", len(r1) > 100 and float(r1[:, 0].mean()) > 150 and float(r1[:, 0].mean()) > 8 * float(r1[:, 1].mean()) and float(r1[:, 0].mean()) > 6 * float(r1[:, 2].mean()),
       f"{len(r1)} px, mean RGB {r1.mean(0).round().astype(int).tolist()}")
 check("alert background stays black in both phases", a0[40:70, 40:70].mean() < 10 and a1[40:70, 40:70].mean() < 10, f"empty background {a0[40:70,40:70].mean():.0f} / {a1[40:70,40:70].mean():.0f}")
-check("alert flips back to white 0.5 s later", float(goat(a2)[:, 1].mean()) > 150)
-check("alert is NOT a screen negative", a1[40:70, 40:70].mean() < 10 and a1.mean() < a0.mean() + 5)
+# ... and every third half-second the whole screen is a black & white negative (white <-> red keep their own phases)
+a3, a4 = frame("alert", 0, 1100), frame("alert", 0, 1600)
+check("alert phase 3: negative, the background is bright", a3[40:70, 40:70].mean() > 225, f"empty background {a3[40:70,40:70].mean():.0f}")
+check("alert negative is black & white", float((a3.max(2) - a3.min(2)).max()) < 3)
+check("alert negative = inverted skull", abs(float((255 - a3[::4, ::4].mean(2)).mean() - a0[::4, ::4].mean(2).mean())) < 12)
+check("alert cycle restarts: white goat on black again", a4[40:70, 40:70].mean() < 10 and float(goat(a4)[:, 1].mean()) > 150)
 
 bm0 = inner(frame("idle", 0, 0, (0, 0), 0)).max(2) > 40; by0, bx0 = np.nonzero(bm0)
 check("the centred skull: its snout sits on the panel centre", abs(bx0[by0 > by0.max() - 3].mean() - W / 2) <= 3 * W / 800, f"snout x {bx0[by0 > by0.max() - 3].mean():.0f} vs {W/2:.0f}")

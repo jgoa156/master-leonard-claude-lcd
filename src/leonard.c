@@ -30,6 +30,7 @@
 #define COBJMACROS
 #include <winsock2.h>
 #include <windows.h>
+#include <tlhelp32.h>
 #include <mmdeviceapi.h>
 #include "panel.h"
 #include "avatar.h"
@@ -105,7 +106,9 @@ static int hook_main(void) {
 }
 
 typedef struct { const unsigned char *img; const float (*eye)[4]; } PPose;
-static const PPose POSES[3] = {{PAN_LEFT, PEYE_LEFT}, {PAN_FRONT, PEYE_FRONT}, {PAN_RIGHT, PEYE_RIGHT}};
+static const PPose POSES[4] = {{PAN_LEFT, PEYE_LEFT}, {PAN_FRONT, PEYE_FRONT}, {PAN_RIGHT, PEYE_RIGHT}, {PAN_MARK, NULL}};
+#define MARK 3                                               /* the 4th "pose": the Hunter's Mark, while Bloodborne (bb-probe.exe) runs */
+static int MARK_ON;
 static unsigned char FB[PANEL_H][PANEL_W][3];               /* RGB frame */
 #include "lcd.h"                                             /* the USB panel (TURZX / Turing, WinUSB) */
 
@@ -139,9 +142,9 @@ static void tally(int n, int cx, const float ink[3]) {
 #ifndef THICK
 #define THICK 1
 #endif
-static unsigned char TK[3][PANEL_H][PANEL_W];
+static unsigned char TK[4][PANEL_H][PANEL_W];
 static void thick_init(void) {
-    for (int p = 0; p < 3; p++) {
+    for (int p = 0; p < 4; p++) {
         const unsigned char *img = POSES[p].img;
         for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) {
             int v = img[y * PANEL_W + x];
@@ -187,7 +190,7 @@ static void glitch_kick(long t) {
     GLITCH_UNTIL = t + 90 + rand() % 90 + (long)(lv * 120);
 }
 static const float GHOST_R[3] = {220 / 255.0f, 69 / 255.0f, 131 / 255.0f};   /* right-channel ghost: #dc4583 */
-static unsigned char GH[3][PANEL_H][PANEL_W];                 /* per pose: the skull's glow (sharp lines + soft halo) */
+static unsigned char GH[4][PANEL_H][PANEL_W];                 /* per pose: the skull's glow (sharp lines + soft halo) */
 /* system audio level, per channel: the default output device's peak meter. Re-opened every few seconds so a
  * switch between speakers / headphones is followed; if there is no device the ghosts simply stay off. */
 static const GUID LEO_CLSID_MMDeviceEnumerator = {0xBCDE0395, 0xE52F, 0x467C, {0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E}};
@@ -245,11 +248,11 @@ static void audio_poll(long t) {
 }
 /* the status glow behind the skull: a copy of the skull, blurred exactly like the neon border (same band width and
  * falloff, measured from the strokes outwards), tinted with the eye colour and pulsing with the border */
-static unsigned char SG[3][PANEL_H][PANEL_W]; static int SKULL_GLOW = 1;
+static unsigned char SG[4][PANEL_H][PANEL_W]; static int SKULL_GLOW = 1;
 static void sglow_init(void) {
     static float d[PANEL_H][PANEL_W];
     float bw = BORDER_W * (float)(PANEL_W < PANEL_H ? PANEL_W : PANEL_H);
-    for (int p = 0; p < 3; p++) {
+    for (int p = 0; p < 4; p++) {
         for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) d[y][x] = TK[p][y][x] > 60 ? 0 : 1e9f;
         for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) {          /* chamfer distance, two passes */
             float v = d[y][x];
@@ -270,7 +273,7 @@ static void sglow_init(void) {
 static void ghost_init(void) {
     static float a[PANEL_H][PANEL_W], b[PANEL_H][PANEL_W];
     const int R = PANEL_W >= 800 ? 4 : 3;
-    for (int p = 0; p < 3; p++) {
+    for (int p = 0; p < 4; p++) {
         const unsigned char *img = &TK[p][0][0];                  /* ghosts come from the thickened skull so they survive a small window */
         for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) a[y][x] = img[y * PANEL_W + x] / 255.0f;
         for (int pass = 0; pass < 2; pass++) {                /* two box blurs ~ a soft glow */
@@ -337,11 +340,12 @@ static int core(int state, int blink, float dx, float dy, float rx, float ry, in
 
 static void compose(const Av *a, long t) {
     const PPose *P = &POSES[(a->state == DEAD ? 0 : a->dir) + 1];          /* dead: always facing front */
-    /* alert = "I need you": the goat itself blinks white <-> red every 0.5 s; the background stays black */
-    int red = a->state == ALERT && ((t - a->t0) / 500) % 2 == 1;
+    /* alert = "I need you": a 1.5 s cycle, 0.5 s each: white goat, red goat (background black), then the whole screen as a
+     * black & white negative (applied to the finished frame, at the end) */
+    int ph = a->state == ALERT ? (int)(((t - a->t0) / 500) % 3) : 0, red = ph == 1, neg = ph == 2;
     float ink[3] = {1.0f, 1.0f, 0.96f};
     if (red) for (int q = 0; q < 3; q++) ink[q] = BLINK_RED[q] / 255.0f;
-    int pi = (a->state == DEAD ? 0 : a->dir) + 1;
+    int pi = MARK_ON ? MARK : (a->state == DEAD ? 0 : a->dir) + 1;
     float sc = PANEL_W / 800.0f, L = LEV[0], Rt = LEV[1];
     int oxL = (int)lroundf((3 + 7 * L + 10 * PULSE * L) * sc), oxR = (int)lroundf((3 + 7 * Rt + 10 * PULSE * Rt) * sc);   /* louder = further out */
     int gl = t < GLITCH_UNTIL;                                /* a beat just hit: the ghosts are displaced */
@@ -384,7 +388,7 @@ static void compose(const Av *a, long t) {
         glow[q] = (float)ECOL[a->state][q];
         hot[q] = a->state == DEAD ? (float)BLINK_RED[q] : ECOL[a->state][q] + (255 - ECOL[a->state][q]) * 0.45f;
     }
-    for (int s = 0; s < 2; s++) {
+    for (int s = 0; s < 2 && !MARK_ON; s++) {               /* the mark has no eyes: the border and its glow carry the mood */
         float ex = P->eye[s][0], ey = P->eye[s][1], rx = P->eye[s][2], ry = P->eye[s][3];
         int sx = ex < PANEL_W / 2.0f ? -1 : 1;
         const float RB = 2.2f;                                /* reach of the eye's own halo */
@@ -440,6 +444,11 @@ static void compose(const Av *a, long t) {
             }
         }
     }
+    if (neg)                                                  /* the negative phase: black & white, glitch and glow included */
+        for (int y = 0; y < PANEL_H; y++) for (int x = 0; x < PANEL_W; x++) {
+            unsigned char g = FB[y][x][0] > FB[y][x][1] ? FB[y][x][0] : FB[y][x][1]; if (FB[y][x][2] > g) g = FB[y][x][2];
+            FB[y][x][0] = FB[y][x][1] = FB[y][x][2] = (unsigned char)(255 - g);
+        }
 }
 
 /* ------------------------------------------------------------ Claude sessions (leonard_hook.exe -> UDP) */
@@ -607,6 +616,13 @@ static LRESULT CALLBACK tray_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     }
     return DefWindowProc(h, msg, w, l);
 }
+/* Bloodborne running? (its launcher, bb-probe.exe) */
+static int bb_running(void) {
+    HANDLE h = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); PROCESSENTRY32 e = {sizeof e}; int on = 0;
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    for (BOOL ok = Process32First(h, &e); ok && !on; ok = Process32Next(h, &e)) on = !_stricmp(e.szExeFile, "bb-probe.exe");
+    CloseHandle(h); return on;
+}
 static void tray_init(void) {
     WNDCLASSA wc = {0}; wc.lpfnWndProc = tray_proc; wc.hInstance = GetModuleHandle(NULL); wc.lpszClassName = "leonard_tray";
     RegisterClassA(&wc);
@@ -638,6 +654,7 @@ int main(int argc, char **argv) {
         if (getenv("LEONARD_NOGLOW")) FB_GLOW = SKULL_GLOW = 0;
         if (getenv("LEONARD_NOSKULLGLOW")) SKULL_GLOW = 0;
         if (getenv("LEONARD_PULSE")) PULSE = (float)atof(getenv("LEONARD_PULSE"));   /* tests / mockups: a hit in progress */          /* tests: a frame without the edge glow */
+        MARK_ON = getenv("LEONARD_MARK") != NULL;              /* tests: the Bloodborne frame */
         a.state = st; a.dir = argc > ai + 1 ? atoi(argv[ai + 1]) : 0;
         thick_init(); ghost_init(); sglow_init();
         if (argc > ai + 5) { LEV[0] = (float)atof(argv[ai + 4]); LEV[1] = (float)atof(argv[ai + 5]); }   /* audio levels to show */
@@ -745,7 +762,8 @@ int main(int argc, char **argv) {
         if (audio && !dorm) audio_poll(t);
         if (t >= manual_until) { int m = sessions_mood(t); if (m != a.state) av_set(&a, m, t); }
         av_tick(&a, t);
-        if (follow) {                                        /* the head looks at the screen third the cursor is in */
+        {   static long next_scan; if (t >= next_scan) { MARK_ON = bb_running(); next_scan = t + 2000; } }
+        if (follow && !MARK_ON) {                                        /* the head looks at the screen third the cursor is in */
             POINT cp; if (GetCursorPos(&cp)) cur_dir = look_dir(cur_dir, cp.x, GetSystemMetrics(SM_CXSCREEN));
             a.dir = cur_dir;
         }
@@ -756,7 +774,7 @@ int main(int argc, char **argv) {
         {   /* status file: shown mood + every session's own mood, rewritten whenever any of it changes */
             char sig[2048]; static const char *LOOK[3] = {"left", "center", "right"};
             int n = snprintf(sig, sizeof sig, "%s %d audio=%c%c lcd=%s look=%s\n", SNAME[a.state], NS,
-                             LEV[0] > 0.15f ? 'L' : '-', LEV[1] > 0.15f ? 'R' : '-', LCD_ON ? LCD_NAME : LCD_ERR, LOOK[a.dir + 1]);
+                             LEV[0] > 0.15f ? 'L' : '-', LEV[1] > 0.15f ? 'R' : '-', LCD_ON ? LCD_NAME : LCD_ERR, MARK_ON ? "mark" : LOOK[a.dir + 1]);
             if (LCD_ON) n += snprintf(sig + n, sizeof sig - n, "lcd fps=%.1f compose=%dms enc=%dms usb=%dms jpeg=%dKB\n", LCD_FPS10 / 10.0, COMPOSE_MS, LCD_ENC_MS, LCD_USB_MS, LCD_KB);   /* audio: coarse, so it is not rewritten every frame */
             for (int i = 0; i < NS && n < 1900; i++) n += snprintf(sig + n, sizeof sig - n, "  ...%.8s %s%s\n", SS[i].id + (strlen(SS[i].id) > 8 ? strlen(SS[i].id) - 8 : 0), SNAME[SS[i].mood], SS[i].worked ? " (worked)" : "");
             if (strcmp(sig, last_sig)) { strcpy(last_sig, sig); FILE *f = rt_fopen("status.txt", "w"); if (f) { fputs(sig, f); fclose(f); } }
